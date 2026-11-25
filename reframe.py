@@ -4,7 +4,7 @@
 # smoothed crop centre per frame -> shots whose subjects are too spread out get a blurred-fill frame.
 # Several people far apart (couch podcast): follow whoever talks (mouth motion per face x speech loudness), hard cut on change,
 # split screen when two trade lines fast; if the signal is unsure the shot stays blurred-fill.
-import json, subprocess, sys
+import json, os, subprocess, sys
 from functools import lru_cache
 from pathlib import Path
 import cv2, numpy as np
@@ -14,7 +14,8 @@ from mediapipe.tasks.python import vision
 
 M = Path(__file__).resolve().parent / "models"
 YUNET = np.frombuffer((M / "yunet.onnx").read_bytes(), np.uint8)  # bytes, not a path: OpenCV cannot open paths with non-ASCII usernames
-OW, OH = 1080, 1920
+SCALE = 2 if os.environ.get("CLIPPER_4K", "1") != "0" else 1  # default 4K (2160x3840); set CLIPPER_4K=0 for 1080x1920
+OW, OH = 1080 * SCALE, 1920 * SCALE
 SAMPLE = 4  # detect every Nth frame
 TINY_FACE = 0.022  # cam face narrower than this share of the frame width (42 px at 1920) = too small to fill the top panel (measured usable cams 0.03-0.07 W; the Kai trailer-reaction cam 0.018 W)
 
@@ -96,10 +97,10 @@ def rect(box, W, H, k):
 
 def panels(f, rs):
     """One crop = the whole 9:16 frame; two crops = split screen, first on top."""
-    if len(rs) == 1: x0, y0, x1, y1 = rs[0]; return cv2.resize(f[y0:y1, x0:x1], (OW, OH), interpolation=cv2.INTER_CUBIC)
+    if len(rs) == 1: x0, y0, x1, y1 = rs[0]; return cv2.resize(f[y0:y1, x0:x1], (OW, OH), interpolation=cv2.INTER_LANCZOS4)
     out = np.zeros((OH, OW, 3), np.uint8)
-    for n, (x0, y0, x1, y1) in enumerate(rs): out[n * OH // 2:(n + 1) * OH // 2] = cv2.resize(f[y0:y1, x0:x1], (OW, OH // 2), interpolation=cv2.INTER_CUBIC)
-    out[OH // 2 - 3:OH // 2 + 3] = 0; return out  # thin seam
+    for n, (x0, y0, x1, y1) in enumerate(rs): out[n * OH // 2:(n + 1) * OH // 2] = cv2.resize(f[y0:y1, x0:x1], (OW, OH // 2), interpolation=cv2.INTER_LANCZOS4)
+    return out
 
 def speakers(path, a, b, W, H, fps, N):
     """People sitting apart (couch podcast): follow whoever talks. Lip motion per face (jawOpen changes) while the clip is loud;
@@ -187,10 +188,10 @@ def plan(path):
     xs = np.clip(xs, cw / 2, W - cw / 2)
     return dict(W=W, H=H, fps=fps, cw=cw, N=N, shots=shotlog), xs, mode
 
-def encoder():
-    """NVIDIA GPU encoder if it really works on this PC, else CPU x264 (works everywhere)."""
+def encoder(cq=16):
+    """NVIDIA GPU encoder if it really works on this PC, else CPU x264 (works everywhere). High-quality CQ/CRF for crisp 4K/webcam detail."""
     probe = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "nullsrc=s=256x256", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True)
-    return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"] if probe.returncode == 0 else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "19"]
+    return ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(cq), "-b:v", "0"] if probe.returncode == 0 else ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(cq)]
 
 TOP_CUT = 0.08  # stream overlays (viewer counters, alerts) sit in the top strip: crop it off, which also zooms the face a little
 BAND = (.15, .10, .15, .20)  # left/top/right/bottom share of the source frame where stream widgets live; a blob centred there is overlay, deeper in is game
@@ -244,7 +245,7 @@ def fit(boxes, win, W, H, xlim=None, ylim=None):
 def crop916(f, x, win=None):
     """9:16 crop centred on x, minus the top strip. win=(y0, height, xoff) from trim916() trims overlays that sit in the crop (counters, footers)."""
     H, W = f.shape[:2]; y0, ch, xo = win or (int(H * TOP_CUT), H - int(H * TOP_CUT), 0); cw = int(ch * 9 / 16)
-    x0 = int(np.clip(round(x - cw / 2 + xo), 0, W - cw)); return cv2.resize(f[y0:y0 + ch, x0:x0 + cw], (OW, OH), interpolation=cv2.INTER_CUBIC)
+    x0 = int(np.clip(round(x - cw / 2 + xo), 0, W - cw)); return cv2.resize(f[y0:y0 + ch, x0:x0 + cw], (OW, OH), interpolation=cv2.INTER_LANCZOS4)
 
 def trim916(boxes, xs, W, H):
     """fit() for crop916 around subject columns xs (the crop pans over them: the tightest answer of the min/median/max column wins). Top strip stays cut. -> (y0, height, xoff)."""
@@ -447,7 +448,7 @@ def fill(f, W, H, cw, rc=None):
         out = np.zeros((OH, OW, 3), np.uint8)
         for (x0, y0, x1, y1), (a, b, c, d) in rc:
             if FLIP and len(rc) == 2: b, d = OH - d, OH - b  # flip: two call tiles swap places
-            out[b:d, a:c] = cv2.resize(f[y0:y1, x0:x1], (c - a, d - b), interpolation=cv2.INTER_CUBIC)
+            out[b:d, a:c] = cv2.resize(f[y0:y1, x0:x1], (c - a, d - b), interpolation=cv2.INTER_LANCZOS4)
         return out
     if rc is None:
         rows = np.flatnonzero(f[:, ::8].max(axis=(1, 2)) > 30)  # letterbox bars (cinematic uploads) are pure black: trim them, equal top and bottom
@@ -536,7 +537,7 @@ if __name__ == "__main__":
 
 
 # ---------- Stacked layout for streamer reactions: facecam on top, game below ----------
-TOP_H = 768  # 40% of 1920
+TOP_H = 768 * SCALE  # 40% of OH (768 in 1080p, 1536 in 4K)
 FLIP = False  # flip option: stacked layouts put the cam BELOW the game (clip.py sets it per Short)
 def stack_geom(flip=False):
     """Row layout of the stacked 9:16: cam panel (y, h), game panel (y, h), seam centre y. flip = cam below the game."""
@@ -660,9 +661,18 @@ def stack_runs(src, cam, step=4):
         i = j
     return out
 
-BUB, BUB_Y = 380, 170  # "bubble" layout: round cam this wide, its top edge (top centre: clear of the Shorts buttons on the right and the bottom UI)
+BUB, BUB_Y = 380 * SCALE, 170 * SCALE  # "bubble" layout: round cam this wide, its top edge (scales cleanly for 4K)
 def bubble_mask():
-    m = np.zeros((BUB, BUB), np.float32); cv2.circle(m, (BUB // 2, BUB // 2), BUB // 2 - 6, 1, -1, cv2.LINE_AA); return m[..., None]
+    m = np.zeros((BUB, BUB), np.float32); cv2.circle(m, (BUB // 2, BUB // 2), BUB // 2 - 6 * SCALE, 1, -1, cv2.LINE_AA); return m[..., None]
+def enhance_cam(crop, tw, th):
+    """Fast Lanczos4 webcam upscale + crisp unsharp detail recovery (preserves maximum detail from 4K/1440p/1080p sources)."""
+    sc = tw / max(crop.shape[1], 1)
+    up = cv2.resize(crop, (tw, th), interpolation=cv2.INTER_LANCZOS4)
+    if sc >= 1.4:
+        amt = 0.60 if sc >= 3.0 else 0.40
+        blur = cv2.GaussianBlur(up, (0, 0), 1.8 * SCALE)
+        up = cv2.addWeighted(up, 1.0 + amt, blur, -amt, 0)
+    return up
 
 def render_stack(src, dst, cam, layout="stack"):
     cap = cv2.VideoCapture(str(src)); W = int(cap.get(3)); H = int(cap.get(4)); N = int(cap.get(7)); fps = cap.get(5)
@@ -696,21 +706,19 @@ def render_stack(src, dst, cam, layout="stack"):
             if v not in wins: wins[v] = trim916(fb, [v], W, H)
             frame = crop916(f, v, wins[v])
         elif layout == "bubble":
-            out[:] = cv2.resize(f[gy0:gy1, fx:fx + fw], (OW, OH), interpolation=cv2.INTER_CUBIC)
-            b = cv2.resize(f[sy:sy + s, sx:sx + s], (BUB, BUB), interpolation=cv2.INTER_CUBIC).astype(np.float32)
+            out[:] = cv2.resize(f[gy0:gy1, fx:fx + fw], (OW, OH), interpolation=cv2.INTER_LANCZOS4)
+            b = enhance_cam(f[sy:sy + s, sx:sx + s], BUB, BUB).astype(np.float32)
             x0, y0 = (OW - BUB) // 2, BUB_Y
-            cv2.circle(out, (x0 + BUB // 2, y0 + BUB // 2), BUB // 2 - 1, (255, 255, 255), -1, cv2.LINE_AA)  # white ring = the 6 px the mask leaves
+            cv2.circle(out, (x0 + BUB // 2, y0 + BUB // 2), BUB // 2 - SCALE, (255, 255, 255), -1, cv2.LINE_AA)  # white ring
             roi = out[y0:y0 + BUB, x0:x0 + BUB].astype(np.float32)
             out[y0:y0 + BUB, x0:x0 + BUB] = (b * mask + roi * (1 - mask)).astype(np.uint8)
             frame = out
         else:
-            top = cv2.resize(f[cam[1]:cam[3], cam[0]:cam[2]], (OW, TOP_H), interpolation=cv2.INTER_CUBIC)
-            out[cy:cy + TOP_H] = cv2.addWeighted(top, 1.6, cv2.GaussianBlur(top, (0, 0), 3), -0.6, 0) if sharpen else top  # small cams scaled 3x+ look soft: unsharp mask
+            out[cy:cy + TOP_H] = enhance_cam(f[cam[1]:cam[3], cam[0]:cam[2]], OW, TOP_H)
             if rg:  # game window full width over a blurred copy of itself (inset 2 % = its frame)
                 ix, iy = int(.02 * (rg[2] - rg[0])), int(.02 * (rg[3] - rg[1])); c = f[rg[1] + iy:rg[3] - iy, rg[0] + ix:rg[2] - ix]; fh = min(bh, int(OW * c.shape[0] / c.shape[1]))
-                bg = cv2.convertScaleAbs(cv2.resize(cv2.GaussianBlur(cv2.resize(c, (OW // 8, bh // 8)), (0, 0), 4), (OW, bh)), alpha=0.55); y = (bh - fh) // 2; bg[y:y + fh] = cv2.resize(c, (OW, fh), interpolation=cv2.INTER_AREA); out[gy:gy + bh] = bg
-            else: out[gy:gy + bh] = cv2.resize(f[gy0:gy1, gx:gx + bw], (OW, bh), interpolation=cv2.INTER_CUBIC)
-            out[sm - 3:sm + 3] = 0  # thin seam
+                bg = cv2.convertScaleAbs(cv2.resize(cv2.GaussianBlur(cv2.resize(c, (OW // 8, bh // 8)), (0, 0), 4), (OW, bh)), alpha=0.55); y = (bh - fh) // 2; bg[y:y + fh] = cv2.resize(c, (OW, fh), interpolation=cv2.INTER_LANCZOS4); out[gy:gy + bh] = bg
+            else: out[gy:gy + bh] = cv2.resize(f[gy0:gy1, gx:gx + bw], (OW, bh), interpolation=cv2.INTER_LANCZOS4)
             frame = out
         ff.stdin.write(cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420).tobytes()); i += 1
     cap.release(); ff.stdin.close(); ff.wait()

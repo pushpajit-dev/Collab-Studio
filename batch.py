@@ -10,7 +10,7 @@ sys.stdout.reconfigure(encoding="utf-8")  # hooks can carry emoji; a cp1252 pipe
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE)); import formats  # "format": callback, compilation, escalation, thenvsnow, reveal, chat, waitforit (default moment)
 
-PER_SOURCE = 2  # h19: 3 of 6 Shorts came from one Normies video (avg 5.4); a mix scores higher
+PER_SOURCE = int(os.environ.get("CLIPPER_PER_SOURCE", 2))  # default 2 per source; set CLIPPER_PER_SOURCE=N when making N Shorts from one link
 MAX_SPAN, MAX_TOTAL = 60, 64  # bench2 (18 Nov): viral Twitch clips run 6-61 s, median 25, 4/10 are 48-61 s; the old 32/36 cut setups and blocked every 35 s live clip
 OPT_KEYS = ("position", "watermark", "watermark_pos", "watermark_opacity", "watermark_size", "progress", "endcard", "aspects", "emoji", "lang", "flash", "lift", "fillers", "blackfix", "denoise", "squeeze", "flip", "theme", "cap_size", "hook_text", "hook_box", "progress_color", "watermark_color", "colors")
 def opts_json(p, skip=()):

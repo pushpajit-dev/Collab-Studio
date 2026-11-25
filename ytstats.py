@@ -7,7 +7,21 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 DATA, ANA = "https://www.googleapis.com/youtube/v3", "https://youtubeanalytics.googleapis.com/v2/reports"
-SCOPES = "https://www.googleapis.com/auth/yt-analytics.readonly https://www.googleapis.com/auth/youtube.readonly"
+UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+SCOPES = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/yt-analytics.readonly https://www.googleapis.com/auth/youtube.readonly"
+DEFAULT_UPLOAD_CFG = {
+    "category_id": "20",
+    "game_title": "Grand Theft Auto VI",
+    "language": "en",
+    "extra_hashtags": "#gta6 #gtavi #shorts #gaming",
+    "extra_tags": "GTA 6, Grand Theft Auto VI, GTA VI, GTA 6 Shorts, Gaming Shorts",
+    "desc_template": "{title}\n\n{hashtags}\n{credit}\n\nGame: {game_title}",
+    "privacy": "private",
+    "made_for_kids": False,
+    "embeddable": True,
+    "notify_subscribers": True,
+    "add_shorts_tag": True,
+}
 VERBS = set("watch see look stop wait why how make build get find learn try use spot hear meet beat break catch clip drop expose reveal show survive steal crash escape ruin save take unlock leak hit run shoot play ask say tell think guess".split())
 _get = None   # test hook: replaces the HTTP GET (url, headers) -> dict
 
@@ -189,6 +203,117 @@ def _find(ws, key, q, e):
             if o["title"].strip().lower() == ttl: L[k] = o["id"]; p.write_text(json.dumps(L)); return o["id"]
 
 
+def _defaults_path(ws): return Path(ws) / "yt" / "upload_defaults.json"
+def load_defaults(ws):
+    p = _defaults_path(ws); cfg = dict(DEFAULT_UPLOAD_CFG)
+    if p.exists():
+        try: cfg.update(json.loads(p.read_text(encoding="utf-8")))
+        except Exception: pass
+    return cfg
+def save_defaults(ws, d):
+    cfg = load_defaults(ws)
+    for k in DEFAULT_UPLOAD_CFG:
+        if k in d: cfg[k] = d[k]
+    cfg["category_id"] = str(cfg.get("category_id") or "20")
+    cfg["language"] = re.sub(r"[^a-zA-Z\-]", "", str(cfg.get("language") or "en"))[:10] or "en"
+    cfg["privacy"] = cfg.get("privacy") if cfg.get("privacy") in ("private", "unlisted", "public") else "private"
+    for bk in ("made_for_kids", "embeddable", "notify_subscribers", "add_shorts_tag"):
+        cfg[bk] = bool(cfg.get(bk))
+    p = _defaults_path(ws); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
+    return cfg
+
+def _has_upload_scope(ws):
+    tp = tok_path(ws)
+    if not tp.exists(): return False
+    try:
+        t = json.loads(tp.read_text(encoding="utf-8"))
+        return "youtube.upload" in str(t.get("scope", ""))
+    except Exception: return False
+
+def build_upload_body(short_txt, cfg, scheduled_utc=None, overrides=None):
+    c = dict(cfg); c.update({k: v for k, v in (overrides or {}).items() if v is not None})
+    raw_title = (c.get("title") or short_txt.get("title") or "GTA 6 Short").strip()
+    if c.get("add_shorts_tag") and "#shorts" not in raw_title.lower() and len(raw_title) <= 91:
+        raw_title = raw_title + " #shorts"
+    title = raw_title[:100]
+    tags_set, hashtags_list = [], []
+    for src in (short_txt.get("hashtags", ""), c.get("extra_hashtags", "")):
+        for h in re.findall(r"#[\w]+", src or ""):
+            if h.lower() not in [x.lower() for x in hashtags_list]: hashtags_list.append(h)
+    hashtags_str = " ".join(hashtags_list)
+    credit = (c.get("credit") if c.get("credit") is not None else short_txt.get("credit", "")).strip()
+    game_title = str(c.get("game_title") or "").strip()
+    tpl = str(c.get("desc_template") or DEFAULT_UPLOAD_CFG["desc_template"])
+    if c.get("description") is not None and str(c.get("description")).strip():
+        description = str(c["description"]).strip()
+    else:
+        description = tpl.replace("{title}", short_txt.get("title", "")).replace("{hashtags}", hashtags_str).replace("{credit}", credit).replace("{game_title}", game_title).strip()
+        description = re.sub(r"\n{3,}", "\n\n", description)
+    for t in ([game_title] if game_title else []) + [x.strip() for x in str(c.get("extra_tags") or "").split(",") if x.strip()] + [h.lstrip("#") for h in hashtags_list]:
+        if t and t.lower() not in [x.lower() for x in tags_set]: tags_set.append(t[:60])
+    lang = str(c.get("language") or "en")
+    snippet = dict(title=title, description=description[:5000], tags=tags_set[:30], categoryId=str(c.get("category_id") or "20"),
+                   defaultLanguage=lang, defaultAudioLanguage=lang)
+    status = dict(privacyStatus="private" if scheduled_utc else (c.get("privacy") or "private"),
+                  selfDeclaredMadeForKids=bool(c.get("made_for_kids", False)),
+                  embeddable=bool(c.get("embeddable", True)))
+    if scheduled_utc:
+        status["publishAt"] = scheduled_utc  # YouTube requires privacyStatus='private' when publishAt is set
+    return dict(snippet=snippet, status=status), bool(c.get("notify_subscribers", True))
+
+def upload_video(ws, mp4_path, body, notify_subscribers=True):
+    tok = access_token(ws)
+    if not tok: raise RuntimeError("Not signed in to YouTube. Connect your YouTube OAuth client JSON in Settings > YouTube Channel.")
+    if not _has_upload_scope(ws): raise RuntimeError("Your YouTube sign-in is read-only. Click 'Connect / Re-authorize YouTube' in Settings > YouTube Channel to grant upload permission.")
+    mp4 = Path(mp4_path)
+    if not mp4.is_file(): raise RuntimeError("Video file not found: " + str(mp4))
+    raw = mp4.read_bytes()
+    params = urllib.parse.urlencode(dict(uploadType="resumable", part="snippet,status", notifySubscribers="true" if notify_subscribers else "false"))
+    init_req = urllib.request.Request(
+        f"{UPLOAD_URL}?{params}",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + tok,
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Length": str(len(raw)),
+            "X-Upload-Content-Type": "video/mp4",
+        },
+    )
+    try:
+        with urllib.request.urlopen(init_req, timeout=60) as r:
+            upload_loc = r.headers.get("Location")
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", "ignore")[:400]
+        try: msg = json.loads(msg)["error"]["message"]
+        except Exception: pass
+        raise RuntimeError(f"YouTube init failed ({e.code}): {msg}")
+    if not upload_loc: raise RuntimeError("YouTube did not return a resumable upload Location header.")
+    put_req = urllib.request.Request(
+        upload_loc, data=raw, method="PUT",
+        headers={"Authorization": "Bearer " + tok, "Content-Type": "video/mp4", "Content-Length": str(len(raw))},
+    )
+    try:
+        with urllib.request.urlopen(put_req, timeout=600) as r:
+            res = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", "ignore")[:400]
+        try: msg = json.loads(msg)["error"]["message"]
+        except Exception: pass
+        raise RuntimeError(f"YouTube upload failed ({e.code}): {msg}")
+    vid = res.get("id", "")
+    return dict(ok=True, id=vid, url=f"https://youtube.com/shorts/{vid}" if vid else "",
+                studio_url=f"https://studio.youtube.com/video/{vid}/edit" if vid else "",
+                privacy=body["status"]["privacyStatus"], publishAt=body["status"].get("publishAt", ""))
+
+def _read_short_txt(ws, run, file):
+    p = (Path(ws) / run / file).with_suffix(".txt")
+    L = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    L += [""] * (3 - len(L))
+    return dict(title=L[0].strip(), hashtags=L[1].strip(), credit="\n".join(L[2:]).strip())
+
+
 def handle(method, path, query, body, ws, env, save_env):
     """-> (status, json). Mount in app.py (inside do_GET and do_POST, after the token check, where p = the path):
         import ytstats                                   # top of file
@@ -197,7 +322,12 @@ def handle(method, path, query, body, ws, env, save_env):
     e = dict(env); Path(ws, "yt").mkdir(parents=True, exist_ok=True); key = e.get("YT_API_KEY"); P = path.rstrip("/"); q = query or {}; b = body or {}
     try:
         if P == "/api/yt/status" and method == "GET":
-            return 200, dict(has_key=bool(key), channel=e.get("YT_CHANNEL", ""), has_oauth=(Path(ws) / "yt" / "client.json").exists(), signed_in=tok_path(ws).exists(), network="Calls go to Google APIs (googleapis.com) only when a key is saved or a linked Short is opened; nothing else leaves this PC.")
+            return 200, dict(has_key=bool(key), channel=e.get("YT_CHANNEL", ""), has_oauth=(Path(ws) / "yt" / "client.json").exists(),
+                             signed_in=tok_path(ws).exists(), can_upload=_has_upload_scope(ws), defaults=load_defaults(ws),
+                             network="Calls go directly to Google/YouTube official APIs (googleapis.com) using your own free credentials; nothing goes to any paid third party.")
+        if P == "/api/yt/defaults":
+            if method == "POST": return 200, dict(ok=True, defaults=save_defaults(ws, b))
+            return 200, dict(defaults=load_defaults(ws))
         if P == "/api/yt/key" and method == "POST":
             k = (b.get("api_key") or "").strip()
             if k:
@@ -206,11 +336,32 @@ def handle(method, path, query, body, ws, env, save_env):
             if b.get("channel") is not None: e["YT_CHANNEL"] = b["channel"].strip()
             save_env(e); return 200, dict(ok=True)
         if P == "/api/yt/oauth" and method == "POST":
-            cj = b.get("client_json"); cj = json.loads(cj) if isinstance(cj, str) else cj
-            if not (cj and (cj.get("installed") or cj.get("web"))): return 400, dict(error="Upload the OAuth client JSON (Desktop app) from Google Cloud.")
-            try: check_client(cj)
-            except ValueError as x: return 400, dict(error=str(x))
-            Path(ws, "yt", "client.json").parent.mkdir(parents=True, exist_ok=True); Path(ws, "yt", "client.json").write_text(json.dumps(cj)); return 200, dict(ok=True, auth_url=oauth_start(ws, cj))
+            cp = Path(ws, "yt", "client.json")
+            cj = b.get("client_json")
+            if cj:
+                cj = json.loads(cj) if isinstance(cj, str) else cj
+                if not (cj and (cj.get("installed") or cj.get("web"))): return 400, dict(error="Upload the OAuth client JSON (Desktop app) from Google Cloud.")
+                try: check_client(cj)
+                except ValueError as x: return 400, dict(error=str(x))
+                cp.parent.mkdir(parents=True, exist_ok=True); cp.write_text(json.dumps(cj))
+            elif cp.exists():
+                cj = json.loads(cp.read_text())
+            else:
+                return 400, dict(error="Upload your free Google Cloud OAuth client JSON (Desktop app) first.")
+            return 200, dict(ok=True, auth_url=oauth_start(ws, cj))
+        if P == "/api/yt/upload" and method == "POST":
+            run, fn = b.get("run", ""), b.get("file", "")
+            mp4 = (Path(ws) / run / fn).resolve()
+            if Path(ws).resolve() not in mp4.parents or not mp4.is_file(): return 400, dict(error="Short file not found")
+            stxt = _read_short_txt(ws, run, fn); cfg = load_defaults(ws)
+            req_body, notify = build_upload_body(stxt, cfg, b.get("scheduledTime") or None, b.get("overrides"))
+            if b.get("dry") or b.get("confirm") is not True:
+                return 200, dict(dry=True, can_upload=_has_upload_scope(ws), notifySubscribers=notify, body=req_body,
+                                 note="Official Free YouTube Data API v3 upload/schedule. Note: YouTube's Studio 'Game title' entity badge can also be defaulted once in YouTube Studio > Settings > Upload Defaults.")
+            res = upload_video(ws, mp4, req_body, notify)
+            if res.get("id"):
+                lp, L = _links(ws); L[f"{run}|{fn}"] = res["id"]; lp.write_text(json.dumps(L))
+            return 200, res
         if not key: return 400, dict(error="Add your YouTube API key in Settings first.")
         if P == "/api/yt/link" and method == "POST":
             i = vid_id(b.get("url"))

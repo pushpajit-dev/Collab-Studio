@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Application runs, temporary workdirs and outputs
+workspace/
+.work/
+app_renders/
+clips/
+out/
+*.noaudio.mp4
+*.part
+*.yuv
+
+# Environment files and credentials
+*.env
+.env
+config.env
+blotato.env
+client_secret.json
+youtube_oauth.json
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log

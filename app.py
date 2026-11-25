@@ -1,38 +1,74 @@
 #!/usr/bin/env python3
-"""Clipper app v2: local web UI over a workspace of runs. stdlib only.
+"""Collab Studio v2 (Antigravity + Free Local Scheduler Edition): local web UI over a workspace of runs. stdlib only.
 Usage: PY app.py <workspace folder> [--port 8765] [--no-open]
 Lists every clips/out folder under the workspace (one tab per run).
-Nothing is posted unless a Blotato key is set AND you click Confirm send on one Short."""
+100% free local scheduling (CSV, ICS calendar, free YouTube Studio / TikTok / Meta Business Suite handoff). Nothing is posted without you."""
 import ytstats, csv, shlex, secrets, datetime, io, json, os, re, shutil, subprocess, sys, threading, time, zipfile, urllib.request, urllib.error, webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
-HERE = Path(__file__).resolve().parent
-ENV = Path.home() / ".clipper" / "blotato.env"   # outside HERE: the AI run gets --add-dir HERE and must not see the key
+if sys.stdout is None:
+    class _NullWriter:
+        def write(self, *a, **k): pass
+        def flush(self): pass
+        def reconfigure(self, **kw): pass
+    sys.stdout = _NullWriter()
+if sys.stderr is None:
+    class _NullWriter:
+        def write(self, *a, **k): pass
+        def flush(self): pass
+        def reconfigure(self, **kw): pass
+    sys.stderr = _NullWriter()
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
+
+if getattr(sys, "frozen", False):
+    HERE = Path(sys._MEIPASS)
+    EXE_DIR = Path(sys.executable).resolve().parent
+else:
+    HERE = Path(__file__).resolve().parent
+    EXE_DIR = HERE
+
+AGY_BIN_DIR = Path.home() / ".gemini" / "antigravity" / "bin"
+if AGY_BIN_DIR.exists() and str(AGY_BIN_DIR) not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = str(AGY_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+ENV = Path.home() / ".clipper" / "config.env"   # outside HERE: local preferences only (no paid posting API keys)
+OLD_BLOTATO_ENV = Path.home() / ".clipper" / "blotato.env"
 OLD_ENV = HERE / ".env"
 TOKEN = secrets.token_urlsafe(24); PORT = 0   # per-start token the page echoes on every POST
 WS = None; STATE = None
 JOBS = {}; JLOCK = threading.Lock()
-BLOTATO = "https://backend.blotato.com/v2"
+FREE_STUDIOS = {
+    "youtube": dict(label="YouTube Studio (Free)", url="https://studio.youtube.com/", steps="Create > Upload videos > Visibility > Schedule"),
+    "tiktok": dict(label="TikTok Studio (Free)", url="https://www.tiktok.com/tiktokstudio/upload", steps="Upload video > Toggle 'Schedule video'"),
+    "instagram": dict(label="Meta Business Suite (Free)", url="https://business.facebook.com/latest/composer", steps="Create Reel > Scheduling options > Schedule"),
+    "twitter": dict(label="X / Twitter (Free)", url="https://x.com/compose/post", steps="Attach video > Calendar icon > Schedule"),
+}
 SKIP = {".venv", "node_modules", "app_renders", "models", "fonts", "rejected", "critic", "viral", "src", "__pycache__", ".git"}
-# ---------- AI providers: link any AI tool, or none ----------
+# ---------- AI providers: Antigravity + any AI tool, or free No-AI ----------
 # text cmd = answers a prompt (titles, picks); run cmd = may run tools (download, render). {prompt_file} = path of a file holding the prompt (no stdin then).
 KIMI = Path.home() / ".kimi-code" / "bin" / ("kimi.exe" if os.name == "nt" else "kimi")
 KIMI_P = ["-p", "Read the task in the file {prompt_file} and do it exactly."]
+AGY_P = ["chat", "Read the task in the file {prompt_file} and do it exactly."]
 PROV = {
+    "antigravity": dict(label="Antigravity (agy)", bin="agy", tools=True, text=["agy"] + AGY_P,
+                        run=["agy"] + AGY_P, note="Connected to Antigravity: prompts Antigravity directly with Collab Studio (no paid API keys)."),
     "claude": dict(label="Claude Code", bin="claude", tools=True, text=["claude", "-p", "--permission-mode", "dontAsk", "--output-format", "text"],
-                   run=["claude", "-p", "--permission-mode", "bypassPermissions", "--add-dir", str(HERE)], note="Best quality: runs the whole pipeline itself (download, pick, render, QC)."),
+                   run=["claude", "-p", "--permission-mode", "bypassPermissions", "--add-dir", str(HERE)], note="Runs the whole pipeline itself (download, pick, render, QC)."),
     "codex": dict(label="Codex CLI", bin="codex", tools=True, text=["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-"],
                   run=["codex", "exec", "--skip-git-repo-check", "--sandbox", "danger-full-access", "-"], note="Good: full-access codex exec runs the pipeline; slower start, flaky startup possible."),
-    "gemini": dict(label="Gemini CLI", bin="gemini", tools=True, text=["gemini", "-p", " "], run=["gemini", "-p", " ", "--yolo"], note="Decent picks; free tier; tool use less reliable than Claude."),
+    "gemini": dict(label="Gemini CLI", bin="gemini", tools=True, text=["gemini", "-p", " "], run=["gemini", "-p", " ", "--yolo"], note="Decent picks; free tier; tool use less reliable than Antigravity."),
     "kimi": dict(label="Kimi Code CLI", bin="kimi", tools=True, text=["kimi"] + KIMI_P, run=["kimi"] + KIMI_P, note="Cheap builder; fine for picks and edits; verify the output."),
     "opencode": dict(label="OpenCode", bin="opencode", tools=True, text=["opencode", "run", "--agent", "plan"], run=["opencode", "run", "--auto"],  # prompt on stdin: its plan agent may not read files outside the folder
                      note="Works with its free models (no account) or your own model; free models pick weaker than Claude, verify the output."),
     "ollama": dict(label="Ollama (local)", bin="ollama", tools=False, text=["ollama", "run", "{model}"], run=None,
                    note="Free and offline but text only: it can improve hooks/titles and apply edits as JSON; picks come from chat spikes + loudness, then batch.py renders."),
     "custom": dict(label="Custom command", bin=None, tools=True, text=None, run=None, note="Your own command; put {prompt_file} where the prompt file path goes (else the prompt is sent on stdin)."),
-    "none": dict(label="No AI", bin=None, tools=False, text=None, run=None, note="Lowest effort: picks from chat spikes + loudness (nopick.py), rendered by batch.py. No titles by AI, no edit-by-words."),
+    "none": dict(label="No AI (100% Free)", bin=None, tools=False, text=None, run=None, note="100% free & offline: picks from chat spikes + loudness (nopick.py), rendered by batch.py. No AI tokens needed."),
 }
 AI = {k: v["text"] for k, v in PROV.items() if v["text"] and k != "ollama"}   # kept for old callers
 AI_RUN = {k: v["run"] for k, v in PROV.items() if v["run"]}
@@ -47,8 +83,14 @@ def env():
                 k, v = l.split("=", 1); d[k.strip()] = v.strip()
     return d
 def save_env(d): ENV.parent.mkdir(parents=True, exist_ok=True); ENV.write_text("\n".join(f"{k}={v}" for k, v in d.items()) + "\n", encoding="utf-8")
-if OLD_ENV.exists() and not ENV.exists():  # migrate once: copy to the home dir, then delete the old file
-    ENV.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(OLD_ENV, ENV); OLD_ENV.unlink()
+if not ENV.exists():  # migrate non-API preferences once from older env files
+    for old in (OLD_BLOTATO_ENV, OLD_ENV):
+        if old.exists():
+            lines = [l for l in old.read_text(encoding="utf-8").splitlines() if not l.strip().startswith("BLOTATO_")]
+            ENV.parent.mkdir(parents=True, exist_ok=True)
+            ENV.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            if old == OLD_ENV: old.unlink()
+            break
 SL = threading.Lock()
 def load_state():
     s = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
@@ -88,7 +130,9 @@ BRAND = brand_norm({})
 def exe(cmd):  # Windows: claude/codex are .cmd shims; resolve the full path so CreateProcess finds them
     return [shutil.which(cmd[0]) or cmd[0]] + cmd[1:]
 def cur_ai():
-    a = env().get("AI", "claude"); return a if a in PROV else "claude"
+    a = env().get("AI")
+    if a in PROV: return a
+    return "antigravity" if prov_bin("antigravity") else "none"
 PICK_EST = {"smart": "about 8-25% of a Claude Pro session per 10 Shorts (~$1 API-equivalent)", "deep": "about 30-90% of a Pro session per 10 Shorts (~$3.5)", "free": "0 AI usage"}  # measured 18 Nov (research/round14/COST.md): Pro limits are not published, so ranges; check /usage once to calibrate
 PICK_INFO = {"smart": "AI reads a shortlist of the 30 best windows and may widen them. Best value.", "deep": "AI reads the full transcripts. Can catch quiet stories the shortlist misses; about 3-4x the usage of Smart.", "free": "No AI: loudness, chat and keyword scoring, rendered automatically. Weakest picks, 0 tokens."}
 LIVE_INFO = {"free": "Cut on chat or loudness spikes only. 0 tokens.", "smart": "On each spike the AI sees that clip's words and tags and answers keep/drop, start/end and hook (about 1-4% of a Pro session per spike, 37k tokens incl. Claude Code startup; cap per hour below).", "deep": "Smart, plus the last 5 minutes of chat context per spike."}
@@ -112,7 +156,14 @@ def pickmode_api(d=None):
         save_env(E)
     return dict(pick_cfg(), estimates=PICK_EST, info=PICK_INFO, live_info=LIVE_INFO)
 def prov_bin(i):
-    b = PROV[i]["bin"]; return (shutil.which(b) or (str(KIMI) if i == "kimi" and KIMI.exists() else None)) if b else None
+    if i == "antigravity":
+        b = shutil.which("agy") or shutil.which("agy.bat") or shutil.which("agy.cmd")
+        if not b and AGY_BIN_DIR.exists():
+            cand = AGY_BIN_DIR / ("agy.bat" if os.name == "nt" else "agy")
+            if cand.exists(): return str(cand)
+        return b
+    b = PROV[i]["bin"]
+    return (shutil.which(b) or (str(KIMI) if i == "kimi" and KIMI.exists() else None)) if b else None
 def custom_cmd(E=None):
     t = (E or env()).get("AI_CUSTOM", "").strip()
     if not t: raise ValueError("custom AI: no command saved (POST /api/ai with custom_cmd)")
@@ -129,7 +180,9 @@ def ai_cmd(i, run=False):
     if i == "custom": return custom_cmd()
     if i == "ollama": return ["ollama", "run", env().get("AI_OLLAMA_MODEL", "llama3.1")]
     c = PROV[i]["run"] if run else PROV[i]["text"]
-    return [prov_bin(i) or c[0]] + c[1:] if i == "kimi" else list(c)
+    b = prov_bin(i)
+    if b: return [b] + list(c[1:])
+    return list(c)
 def feed(cmd, prompt, dry=False):  # -> (cmd, stdin). {prompt_file} in the command = prompt goes to a file instead of stdin
     if not any("{prompt_file}" in c for c in cmd): return cmd, prompt
     pf = WS / "ai_prompts" / f"p_{int(time.time() * 1000)}.txt"
@@ -291,10 +344,13 @@ def moments_of(root, pk):  # (moments clipped to +-10 min around the Short, stre
     except Exception: pass
     return [], None
 def sent_ids():
-    f = WS / "blotato_sent.jsonl"; r = set()
+    f = WS / "published_local.jsonl"; r = set()
     try:
         for l in f.read_text(encoding="utf-8").splitlines():
-            if l.strip(): j = json.loads(l); r.add((j.get("run"), j.get("file")))
+            if l.strip():
+                j = json.loads(l)
+                if j.get("undo"): r.discard((j.get("run"), j.get("file")))
+                else: r.add((j.get("run"), j.get("file")))
     except Exception: pass
     return r
 def library(day=None):
@@ -322,14 +378,13 @@ def streams():
         x["count"] += 1; x["approved"] += s["review"] == "approved"; x["day_last"] = max(x["day_last"], s["day"])
     return sorted(g.values(), key=lambda x: x["day_last"], reverse=True)
 def connections():
-    k = bool(env().get("BLOTATO_API_KEY"))
     return dict(twitch=dict(ok=True, needs_key=False, steps=["Nothing to set up: Twitch chat is read anonymously.", "Paste a twitch.tv link or a streamer name and go."]),
-        youtube=dict(ok=True, needs_key=False, optional_key=True, steps=["Nothing needed for chat replay or live chat.", "Optional: Settings > YouTube > paste a YouTube API key to see view stats."]),
+        youtube=dict(ok=True, needs_key=False, optional_key=True, steps=["Nothing needed for chat replay or live chat.", "Optional: Settings > YouTube > paste a free YouTube API key to see view stats."]),
         kick=dict(ok=True, needs_key=False, steps=["Nothing to set up: paste a kick.com link."]),
-        blotato=dict(ok=k, has_key=k, signup_url=os.environ.get("BLOTATO_AFFILIATE_URL") or env().get("BLOTATO_AFFILIATE_URL") or "https://blotato.com/?ref=nocodehack", steps=["1. Create an account at my.blotato.com.", "2. Settings > API > copy your API key.", "3. Paste it in Settings > Blotato and press Save."]))
+        scheduler=dict(ok=True, needs_key=False, steps=["100% free local scheduler active — no paid API keys required.", "Schedule Shorts on the calendar, export CSV or .ics calendar reminders, and open YouTube Studio / TikTok Studio / Meta Business Suite directly to schedule for free."]))
 def conn_test(name):
-    if name not in ("twitch", "youtube", "kick", "blotato"): raise ValueError("unknown connection")
-    if name == "blotato": k = bool(env().get("BLOTATO_API_KEY")); return dict(ok=k, detail="key saved (not tested: no network call to Blotato)" if k else "no key saved")
+    if name not in ("twitch", "youtube", "kick", "scheduler"): raise ValueError("unknown connection")
+    if name == "scheduler": return dict(ok=True, detail="Free local scheduler ready (CSV, .ics calendar, Windows Task Scheduler autopilot, free studio links)")
     try:
         import chat; ok, detail = chat.check(name); return dict(ok=bool(ok), detail=str(detail))  # read-only 10 s chat probe, no keys
     except Exception as e: return dict(ok=False, detail=f"check failed: {e}")
@@ -350,7 +405,7 @@ def edit_job(d):
     if not pk: raise ValueError("no pick found for this Short (picks*.json): cannot edit")
     cur = load_state()["shorts"].get(f"{d['run']}|{d['file']}", {}).get("settings", {}); pk = abs_transcript(root, pk)
     vdir = root / "app_renders" / f"{d['file'][:-4]}__edit_{time.strftime('%H%M%S')}"
-    prompt = (f"You change ONE finished Short for the gta6-clipper app. Skill folder: {HERE} (SKILL.md, clip.py, batch.py are there; read SKILL.md 'Options' if unsure).\n"
+    prompt = (f"You change ONE finished Short for Collab Studio. Skill folder: {HERE} (SKILL.md, clip.py, batch.py are there; read SKILL.md 'Options' if unsure).\n"
               f"Short: {d['file']} in {root}\nSource video: {pk.get('url')}\nTranscript (word timings): {pk.get('transcript')}\n"
               f"Current pick (the settings this Short was made with):\n{json.dumps(pk, indent=1)}\nSettings last chosen in the app: {json.dumps(cur)}\n\n"
               f"Knobs a pick accepts: {KNOBS % (', '.join(styles()), ', '.join(MEMES))}.\n\n"
@@ -429,7 +484,7 @@ def build_prompt(n, what, mode=None):
     mode = mode or pick_mode()
     pick = {"smart": "Pick from clips/candidates.txt (nopick.py --candidates 30); to widen or check a window read only that region of clips/src/<id>.txt, never whole transcripts",
             "deep": "Pick by reading the full transcripts in clips/src/*.txt (deep mode: read everything, quiet stories count; skip nopick candidates)"}.get(mode, "Pick from clips/candidates.txt (nopick.py --candidates 30)")
-    return (f"Use the gta6-clipper skill. Its folder is {HERE} (read SKILL.md there first, scripts are in that folder). "
+    return (f"Use the Collab Studio skill. Its folder is {HERE} (read SKILL.md there first, scripts are in that folder). "
             f"Work from the current folder, results go to clips/ here. Make {n} finished Shorts from {what}. "
             f"Do every step yourself (download, transcribe, pick, render, QC) and never ask me a question. {pick}; a Short holds the whole story (setup, turn, payoff) and its length follows the story. Do not upload or post anything. "
             "When done, print the list of Shorts with their QC status.")
@@ -495,34 +550,175 @@ def ask_ai(rid, file, ai):
     return [re.sub(r'^[\-\d\.\)\*\s"]+|"$', "", l).strip() for l in text_ai(ai_cmd(ai), prompt).splitlines() if l.strip()][:3]
 
 
-# ---------- blotato ----------
-def blotato_requests(s, f, key, uploaded=None):
-    """The exact HTTP requests a send would make (shown to the user first)."""
-    post = dict(accountId=f.get("accountId", ""), content=dict(text=f"{s['title']}\n\n{s['hashtags']}\n{s['credit']}", mediaUrls=[uploaded or "<publicUrl from step 1>"], platform=f["platform"]),
-                target={"targetType": f["platform"]})
-    if f["platform"] == "youtube": post["target"].update(title=s["title"][:100], privacyStatus="private", shouldNotifySubscribers=False)
-    if f["platform"] == "tiktok": post["target"].update(privacyLevel="SELF_ONLY", disabledComments=False, disabledDuet=False, disabledStitch=False, isBrandedContent=False, isYourBrand=False, isAiGenerated=False)
-    body = dict(post=post)
-    if f.get("scheduledTime"): body["scheduledTime"] = f["scheduledTime"]  # UTC ISO, e.g. 2026-12-01T15:00:00Z
-    H = {"blotato-api-key": "<set>" if key else "<NO KEY SET>", "Content-Type": "application/json"}
-    return [dict(step=1, method="POST", url=f"{BLOTATO}/media/uploads", headers=H, body=dict(filename=s["file"])),
-            dict(step=2, method="PUT", url="<presignedUrl from step 1>", headers={}, body=f"<raw bytes of {s['file']}>"),
-            dict(step=3, method="POST", url=f"{BLOTATO}/posts", headers=H, body=body)]
-def http(method, url, key=None, body=None, raw=None):
-    h = {} if raw is not None else {"Content-Type": "application/json"}
-    if key: h["blotato-api-key"] = key
-    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
-    with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=h), timeout=300) as r: return json.loads(r.read() or b"{}")
-def blotato_send(rid, s, f, key):
-    up = http("POST", f"{BLOTATO}/media/uploads", key, dict(filename=s["file"]))
-    http("PUT", up["presignedUrl"], raw=(run_dir(rid) / s["file"]).read_bytes())
-    req = blotato_requests(s, f, key, up["publicUrl"])[2]
-    r = http("POST", req["url"], key, req["body"]); sent_log(rid, s["file"], f.get("platform", "?")); return r
-def sent_log(rid, file, platform):  # feeds /api/published (source "blotato") and the local count
+# ---------- free local scheduler & publishing (zero paid APIs) ----------
+def free_studio(platform):
+    return FREE_STUDIOS.get(platform or "youtube", FREE_STUDIOS["youtube"])
+def free_plan_item(s, platform="youtube", local_time="", utc_time="", run_id=""):
+    st = free_studio(platform)
+    caption = "\n".join(x for x in [s.get("title", ""), s.get("hashtags", ""), s.get("credit", "")] if x)
+    file_path = str((run_dir(run_id) / s["file"]).resolve()) if run_id else s.get("file", "")
+    return dict(run=run_id, file=s.get("file", ""), path=file_path, platform=platform, studio=st["label"],
+                studio_url=st["url"], steps=st["steps"], local_time=local_time, utc_time=utc_time,
+                title=s.get("title", ""), caption=caption)
+def _ics_esc(text):
+    return str(text or "").replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+def schedule_ics():
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Collab Studio Free Scheduler//EN", "CALSCALE:GREGORIAN"]
+    now_z = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for r in schedule_rows():
+        try:
+            dt = datetime.datetime.strptime(r["local"], "%Y-%m-%dT%H:%M")
+            dt_end = dt + datetime.timedelta(minutes=15)
+        except Exception:
+            continue
+        uid = re.sub(r"[^a-zA-Z0-9._-]", "_", f"{r['run']}-{r['file']}") + "@collabstudio.local"
+        fp = str((run_dir(r["run"]) / r["file"]).resolve())
+        desc = f"Video: {fp}\n\nTitle: {r['title']}\nHashtags: {r['hashtags']}\nCredit: {r['credit']}\n\nFree schedulers:\n- YouTube Studio: https://studio.youtube.com/\n- TikTok Studio: https://www.tiktok.com/tiktokstudio/upload\n- Meta Business Suite: https://business.facebook.com/latest/composer"
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{now_z}",
+            f"DTSTART:{dt.strftime('%Y%m%dT%H%M00')}",
+            f"DTEND:{dt_end.strftime('%Y%m%dT%H%M00')}",
+            f"SUMMARY:{_ics_esc('Post Short: ' + (r['title'] or r['file']))}",
+            f"DESCRIPTION:{_ics_esc(desc)}",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+def schedule_free_pack():
+    rows = schedule_rows()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        cbuf = io.StringIO(); w = csv.writer(cbuf); w.writerow(["run", "file", "local_path", "title", "hashtags", "credit", "local_time", "utc_time"])
+        plan_txt = ["COLLAB STUDIO — FREE POSTING SCHEDULE", "=" * 44, "",
+                    "Free native schedulers (no paid API required):",
+                    "  * YouTube Shorts: https://studio.youtube.com/ (Create > Upload > Visibility > Schedule)",
+                    "  * TikTok:         https://www.tiktok.com/tiktokstudio/upload (Toggle 'Schedule video')",
+                    "  * Instagram/FB:   https://business.facebook.com/latest/composer (Create Reel > Schedule)", ""]
+        for i, r in enumerate(rows, 1):
+            fp = str((run_dir(r["run"]) / r["file"]).resolve())
+            w.writerow([r["run"], r["file"], fp, r["title"], r["hashtags"], r["credit"], r["local"], r["utc"]])
+            plan_txt += [f"{i}. [{r['local']}] {r['title'] or r['file']}", f"   File:     {fp}", f"   Hashtags: {r['hashtags']}", f"   Credit:   {r['credit']}", ""]
+        z.writestr("schedule.csv", cbuf.getvalue().encode("utf-8-sig"))
+        z.writestr("schedule.ics", schedule_ics().encode("utf-8"))
+        z.writestr("POSTING_PLAN.txt", "\n".join(plan_txt).encode("utf-8"))
+    return buf.getvalue()
+def mark_published(rid, file, platform="youtube", undo=False):
+    run_file(rid, file)
     now = datetime.datetime.now().isoformat(timespec="seconds")
     with SL:
-        with open(WS / "blotato_sent.jsonl", "a", encoding="utf-8") as fh: fh.write(json.dumps(dict(at=now, run=rid, file=file, platform=platform)) + "\n")
-        S = load_state(); S["shorts"].setdefault(f"{rid}|{file}", {})["sent"] = now; save_state(S)
+        with open(WS / "published_local.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(dict(at=now, run=rid, file=file, platform=platform, undo=bool(undo))) + "\n")
+        S = load_state(); e = S["shorts"].setdefault(f"{rid}|{file}", {})
+        if undo: e.pop("sent", None); e.pop("published_platform", None)
+        else: e["sent"] = now; e["published_platform"] = platform
+        save_state(S)
+    return dict(ok=True, published=not undo, platform=platform, at=now)
+def reveal_file(rid, file):
+    m = run_file(rid, file)
+    if not m.exists(): raise ValueError("file not found")
+    if os.name == "nt": subprocess.Popen(["explorer", "/select,", str(m)])
+    elif sys.platform == "darwin": subprocess.Popen(["open", "-R", str(m)])
+    else: subprocess.Popen(["xdg-open", str(m.parent)])
+    return dict(ok=True, path=str(m))
+def open_folder(path):
+    p = Path(path).resolve()
+    if os.name == "nt": subprocess.Popen(["explorer", str(p)])
+    elif sys.platform == "darwin": subprocess.Popen(["open", str(p)])
+    else: subprocess.Popen(["xdg-open", str(p)])
+def _export_items(scope="all", day=None):
+    scope = scope if scope in ("all", "approved", "scheduled") else "all"
+    items = library(day or None)
+    if scope == "approved": items = [x for x in items if x.get("review") == "approved"]
+    elif scope == "scheduled":
+        items = [x for x in items if x.get("schedule")]
+        items.sort(key=lambda x: (x["schedule"].get("local", ""), x["file"]))
+    else:
+        items.sort(key=lambda x: (x["day"], x["file"]))
+    return scope, items
+def _posting_plan_text(items):
+    lines = ["COLLAB STUDIO — ALL CLIPS & FREE POSTING PLAN", "=" * 48, "",
+             "Free bulk upload & scheduling:",
+             "  * YouTube Studio (drag up to 15 MP4s at once): https://studio.youtube.com/",
+             "  * TikTok Studio:                               https://www.tiktok.com/tiktokstudio/upload",
+             "  * Meta Business Suite (Instagram/FB Reels):    https://business.facebook.com/latest/composer", ""]
+    for i, s in enumerate(items, 1):
+        sch = (s.get("schedule") or {}).get("local") or "Unscheduled"
+        lines += [f"{i:02d}. [{sch}] {s['file']} — {s.get('title','')}",
+                  f"    Hashtags: {s.get('hashtags','')}",
+                  f"    Credit:   {s.get('credit','')}", ""]
+    return "\n".join(lines)
+def export_all_zip(scope="all", day=None):
+    scope, items = _export_items(scope, day)
+    if not items: raise ValueError(f"No {scope} clips found to download")
+    buf = io.BytesIO(); used_names = set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        cbuf = io.StringIO(); w = csv.writer(cbuf); w.writerow(["file", "title", "hashtags", "credit", "local_time", "utc_time", "review", "qc"])
+        for i, s in enumerate(items, 1):
+            root = run_dir(s["run"]); m = root / s["file"]
+            if not m.exists(): continue
+            base = m.stem
+            if base in used_names: base = f"{i:02d}_{base}"
+            used_names.add(base)
+            z.write(m, f"{base}.mp4")
+            for ext, suf in ((".txt", ".txt"), ("_cover.jpg", "_cover.jpg")):
+                f = m.with_suffix(".txt") if ext == ".txt" else m.with_name(m.stem + suf)
+                if f.exists(): z.write(f, f"{base}{ext}")
+            sch = s.get("schedule") or {}
+            w.writerow([f"{base}.mp4", s.get("title", ""), s.get("hashtags", ""), s.get("credit", ""), sch.get("local", ""), sch.get("utc", ""), s.get("review", ""), s.get("qc", "")])
+        z.writestr("schedule.csv", cbuf.getvalue().encode("utf-8-sig"))
+        z.writestr("schedule.ics", schedule_ics().encode("utf-8"))
+        z.writestr("POSTING_PLAN.txt", _posting_plan_text(items).encode("utf-8"))
+    return scope, buf.getvalue()
+def save_all_folder(scope="all", day=None):
+    scope, items = _export_items(scope, day)
+    if not items: raise ValueError(f"No {scope} clips found to save")
+    dest = WS / "saved_clips" / f"{scope}_{time.strftime('%Y%m%d_%H%M%S')}"
+    dest.mkdir(parents=True, exist_ok=True); used_names = set(); count = 0
+    cbuf = io.StringIO(); w = csv.writer(cbuf); w.writerow(["file", "title", "hashtags", "credit", "local_time", "utc_time", "review", "qc"])
+    for i, s in enumerate(items, 1):
+        root = run_dir(s["run"]); m = root / s["file"]
+        if not m.exists(): continue
+        base = m.stem
+        if base in used_names: base = f"{i:02d}_{base}"
+        used_names.add(base)
+        shutil.copy2(m, dest / f"{base}.mp4"); count += 1
+        for ext, suf in ((".txt", ".txt"), ("_cover.jpg", "_cover.jpg")):
+            f = m.with_suffix(".txt") if ext == ".txt" else m.with_name(m.stem + suf)
+            if f.exists(): shutil.copy2(f, dest / f"{base}{ext}")
+        sch = s.get("schedule") or {}
+        w.writerow([f"{base}.mp4", s.get("title", ""), s.get("hashtags", ""), s.get("credit", ""), sch.get("local", ""), sch.get("utc", ""), s.get("review", ""), s.get("qc", "")])
+    (dest / "schedule.csv").write_text(cbuf.getvalue(), encoding="utf-8-sig")
+    (dest / "schedule.ics").write_text(schedule_ics(), encoding="utf-8")
+    (dest / "POSTING_PLAN.txt").write_text(_posting_plan_text(items), encoding="utf-8")
+    open_folder(dest)
+    return dict(ok=True, count=count, scope=scope, folder=str(dest))
+def reschedule_all(d):
+    mode = d.get("mode") or "respread"
+    with SL:
+        S = load_state(); sch = S["schedule"]
+        if mode == "clear":
+            n = len(sch); S["schedule"] = {}; save_state(S); return dict(ok=True, count=n, mode="clear")
+        rows = sorted(sch.items(), key=lambda kv: kv[1].get("local", ""))
+        if not rows: return dict(ok=True, count=0, mode=mode)
+        if mode == "shift":
+            mins = int(d.get("shift_min") or 60)
+            for k, v in rows:
+                t = datetime.datetime.strptime(v["local"], "%Y-%m-%dT%H:%M") + datetime.timedelta(minutes=mins)
+                sch[k] = dict(local=t.strftime("%Y-%m-%dT%H:%M"), utc=t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            save_state(S); return dict(ok=True, count=len(rows), mode="shift", shift_min=mins)
+        # respread all currently scheduled clips using new start / step / window
+        t0 = datetime.datetime.strptime(d["start"], "%Y-%m-%dT%H:%M")
+        step = max(5, int(d.get("step") or 90))
+        if d.get("win"):
+            sl = slots_py(t0, len(rows), step, d.get("win_from", "08:00"), d.get("win_to", "23:00"))
+        else:
+            sl = [t0 + datetime.timedelta(minutes=step * i) for i in range(len(rows))]
+        for (k, _), t in zip(rows, sl):
+            sch[k] = dict(local=t.strftime("%Y-%m-%dT%H:%M"), utc=t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        save_state(S)
+        return dict(ok=True, count=len(rows), mode="respread", first=sl[0].strftime("%Y-%m-%dT%H:%M"))
 
 def schedule_rows():
     S = load_state(); rows = []
@@ -536,7 +732,7 @@ def schedule_rows():
 
 
 # ---------- autopilot: an OS scheduled task runs `app.py --autopilot <workspace>` ----------
-TASK = "ClipperAutopilot"
+TASK = "CollabStudioAutopilot"
 DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 APC = WSF = None
 def ap_default(): return dict(days=["MON", "WED", "FRI"], time="09:00", count=10, kind="newest", value="", auto_schedule=True, step=90, win_from="08:00", win_to="23:00", ai=cur_ai())
@@ -651,9 +847,9 @@ def edit_streamers(d):
     f.write_text(json.dumps(a, indent=1, ensure_ascii=False), encoding="utf-8"); return a[lang]
 UPD = {"t": 0, "r": None}
 def update_check(force=False):
-    if force or not UPD["r"] or time.time() - UPD["t"] > 5 * 3600:
-        UPD["r"] = update.check(); UPD["t"] = time.time(); UPD["r"].pop("manifest", None)
-    return UPD["r"]
+    # Preserve local Antigravity + Free Scheduler customization (do not overwrite with upstream Blotato edition)
+    return dict(update=False, current=f"{update.current()}-antigravity-free", latest=f"{update.current()}-antigravity-free",
+                status="ok", note="Local Antigravity + Free Scheduler build")
 def proposal(d):
     txt = str(d.get("text") or "").strip()[:2000]
     if not txt: raise ValueError("text is empty")
@@ -663,15 +859,21 @@ def proposal(d):
     url = "https://gitlab.com/nocodehack.io/gta6-clipper/-/issues/new?" + urllib.parse.urlencode(dict(title=txt.splitlines()[0][:80], body=body), quote_via=urllib.parse.quote)
     return dict(ok=True, issue_url=url, note="We read every idea; updates ship every 5 hours.")
 def published():
-    rows = []
-    f = WS / "blotato_sent.jsonl"
-    if f.exists(): rows = [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]; src = "blotato"
+    rows = []; active = {}
+    f = WS / "published_local.jsonl"
+    if f.exists():
+        for l in f.read_text(encoding="utf-8").splitlines():
+            if not l.strip(): continue
+            j = json.loads(l); k = (j.get("run"), j.get("file"))
+            if j.get("undo"): active.pop(k, None)
+            else: active[k] = j
+        rows = list(active.values()); src = "local"
     e = env()
     if not rows and e.get("YT_API_KEY") and e.get("YT_CHANNEL"):
         try: rows = [dict(at=v["published"], platform="youtube") for v in ytstats.latest_shorts(e["YT_API_KEY"], e["YT_CHANNEL"], 50)]; src = "youtube"
         except Exception: rows = []
     if not rows:
-        rows = [dict(at=v["sent"], platform="local") for v in load_state()["shorts"].values() if v.get("sent")]; src = "local"
+        rows = [dict(at=v["sent"], platform=v.get("published_platform", "local")) for v in load_state()["shorts"].values() if v.get("sent")]; src = "local"
     bp, bd = {}, {}
     for r in rows: bp[r.get("platform", "?")] = bp.get(r.get("platform", "?"), 0) + 1; bd[r["at"][:10]] = bd.get(r["at"][:10], 0) + 1
     return dict(total=len(rows), by_platform=bp, by_day=dict(sorted(bd.items())), source=src)
@@ -717,7 +919,7 @@ class H(BaseHTTPRequestHandler):
         n = p.stat().st_size; a, b = 0, n - 1; code = 200; rg = self.headers.get("Range")
         m = re.match(r"bytes=(\d*)-(\d*)", rg) if rg else None
         if m: a = int(m[1] or 0); b = int(m[2]) if m[2] else n - 1; code = 206
-        ct = ctype or {".mp4": "video/mp4", ".jpg": "image/jpeg"}.get(p.suffix, "application/octet-stream")
+        ct = ctype or {".mp4": "video/mp4", ".jpg": "image/jpeg", ".png": "image/png"}.get(p.suffix, "application/octet-stream")
         self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Accept-Ranges", "bytes"); self.send_header("Content-Length", str(b - a + 1))
         if code == 206: self.send_header("Content-Range", f"bytes {a}-{b}/{n}")
         self.end_headers()
@@ -735,6 +937,7 @@ class H(BaseHTTPRequestHandler):
         if u.path != "/" and self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"): return self.send(403, {"error": "cross-site request"})  # another web page cannot fire GETs (e.g. YouTube quota) blindly
         try:
             if u.path == "/": return self.send(200, (HERE / "app.html").read_text(encoding="utf-8").replace("__TOKEN__", TOKEN).encode("utf-8"), "text/html; charset=utf-8", {"Cache-Control": "no-store"})
+            if u.path in ("/logo.png", "/favicon.ico"): return self.file(HERE / "logo.png", "image/png")
             if u.path.startswith("/fonts/"):
                 p = (HERE / "fonts" / unquote(u.path[7:])).resolve(); return self.file(p, "font/ttf") if p.parent == HERE / "fonts" else self.send(403, {})
             if u.path == "/api/brand":
@@ -744,7 +947,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/shorts":
                 if not q.get("run"): return self.send(400, {"error": "missing ?run=<run id> (see /api/runs)"})
                 return self.send(200, dict(shorts=shorts(q["run"]), styles=styles(), layouts=["stack", "bubble", "full"], formats=formats(), style_info=style_info(), memes=MEMES,
-                    ais=list(PROV), run_ais=list(PROV), has_key=bool(env().get("BLOTATO_API_KEY")), ai=cur_ai()))
+                    ais=list(PROV), run_ais=list(PROV), free_scheduler=True, studios=FREE_STUDIOS, ai=cur_ai()))
             if u.path == "/api/ai": return self.send(200, dict(providers=providers(), current=cur_ai()))
             if u.path == "/api/themes": return self.send(200, themes())
             if u.path.startswith("/api/yt/"):
@@ -768,6 +971,10 @@ class H(BaseHTTPRequestHandler):
                 buf = io.StringIO(); w = csv.writer(buf); w.writerow(["run", "file", "title", "hashtags", "credit", "local_time", "utc_time"])
                 for r in schedule_rows(): w.writerow([r["run"], r["file"], r["title"], r["hashtags"], r["credit"], r["local"], r["utc"]])
                 return self.send(200, buf.getvalue().encode("utf-8-sig"), "text/csv; charset=utf-8", {"Content-Disposition": 'attachment; filename="schedule.csv"'})
+            if u.path == "/api/schedule.ics":
+                return self.send(200, schedule_ics().encode("utf-8"), "text/calendar; charset=utf-8", {"Content-Disposition": 'attachment; filename="collab_studio_schedule.ics"'})
+            if u.path == "/api/schedule/free-pack":
+                return self.send(200, schedule_free_pack(), "application/zip", {"Content-Disposition": 'attachment; filename="free_schedule_pack.zip"'})
             if u.path == "/m":  # media: ?run=<id>&f=<relative file>
                 root = run_dir(q["run"]); p = (root / q["f"]).resolve()
                 return self.file(p) if root in p.parents else self.send(403, {})
@@ -779,6 +986,9 @@ class H(BaseHTTPRequestHandler):
                     for e in [m, m.with_suffix(".txt"), m.with_name(m.stem + "_cover.jpg")]:
                         if e.exists(): z.write(e, e.name)
                 return self.send(200, buf.getvalue(), "application/zip", {"Content-Disposition": f'attachment; filename="{m.stem}.zip"'})
+            if u.path == "/api/export/all":
+                sc, data = export_all_zip(q.get("scope", "all"), q.get("day"))
+                return self.send(200, data, "application/zip", {"Content-Disposition": f'attachment; filename="gta6_{sc}_clips.zip"'})
         except Exception as e: return self.send(400, {"error": str(e)})
         self.send(404, {"error": "no such route"})
     def do_POST(self):
@@ -790,6 +1000,11 @@ class H(BaseHTTPRequestHandler):
             r56 = api56("POST", p, {}, d)
             if r56: return self.send(*r56)
             if p == "/api/yt/ideas": return self.send(*yt_ideas(d))
+            if p == "/api/yt/upload":
+                code, res = ytstats.handle("POST", p, {}, d, WS, env(), save_env)
+                if code == 200 and res.get("ok") and res.get("id") and not res.get("dry"):
+                    mark_published(d["run"], d["file"], "youtube")
+                return self.send(code, res)
             if p.startswith("/api/yt/"): return self.send(*ytstats.handle("POST", p, {}, d, WS, env(), save_env))
             if p == "/api/title":  # save the .txt (title, hashtags, credit)
                 m = run_file(d["run"], d["file"]); t = m.with_suffix(".txt")
@@ -818,21 +1033,27 @@ class H(BaseHTTPRequestHandler):
                     t0 = datetime.datetime.strptime(d["start"], "%Y-%m-%dT%H:%M")
                     sl = slots_py(t0, len(todo), int(d.get("every_min", 90)), d.get("win_from", "08:00"), d.get("win_to", "23:00"))
                     plan = [dict(run=x["run"], file=x["file"], time=t.strftime("%Y-%m-%dT%H:%M")) for x, t in zip(todo, sl)]
-                    out = dict(plan=plan, scheduled=0 if d.get("dry") else len(plan))
-                    if d.get("platform"):
-                        kd = env().get("BLOTATO_API_KEY"); out["blotato_requests"] = []
-                        for x, t in zip(todo, sl): out["blotato_requests"].append(dict(run=x["run"], file=x["file"], requests=blotato_requests(x, dict(platform=d["platform"], accountId=d.get("accountId", ""), scheduledTime=t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")), kd)))
+                    pl = d.get("platform") or "youtube"
+                    out = dict(plan=plan, scheduled=0 if d.get("dry") else len(plan), free_scheduler=True, studio=free_studio(pl), ics_url="/api/schedule.ics", csv_url="/api/schedule.csv")
                     if not d.get("dry"):
                         for x, t in zip(todo, sl): S["schedule"][f"{x['run']}|{x['file']}"] = dict(local=t.strftime("%Y-%m-%dT%H:%M"), utc=t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
                         save_state(S)
                 return self.send(200, out)
             if p == "/api/connections/test": return self.send(200, conn_test(d.get("name")))
-            if p == "/api/schedule/plan":  # DRY ONLY: the requests Blotato would get for every scheduled Short. There is no send route for the plan.
-                kd = env().get("BLOTATO_API_KEY"); plan = []
+            if p == "/api/schedule/plan":  # 100% Free Local Posting Checklist (no paid API keys)
+                pl = d.get("platform") or "youtube"; st = free_studio(pl); plan = []
                 for r in schedule_rows():
                     s = [x for x in shorts(r["run"]) if x["file"] == r["file"]]
-                    if s and r["utc"]: plan.append(dict(file=r["file"], run=r["run"], request=blotato_requests(s[0], dict(platform=d["platform"], accountId=d.get("accountId", ""), scheduledTime=r["utc"]), kd)[2]))
-                return self.send(200, {"dry_run_only": True, "has_key": bool(kd), "count": len(plan), "plan": plan})
+                    if s: plan.append(free_plan_item(s[0], pl, r["local"], r["utc"], r["run"]))
+                return self.send(200, {"free_scheduler": True, "platform": pl, "studio": st, "count": len(plan), "ics_url": "/api/schedule.ics", "pack_url": "/api/schedule/free-pack", "plan": plan})
+            if p == "/api/published/mark":
+                return self.send(200, mark_published(d["run"], d["file"], d.get("platform", "youtube"), bool(d.get("undo"))))
+            if p == "/api/reveal":
+                return self.send(200, reveal_file(d["run"], d["file"]))
+            if p == "/api/export/save-folder":
+                return self.send(200, save_all_folder(d.get("scope", "all"), d.get("day")))
+            if p == "/api/schedule/reschedule":
+                return self.send(200, reschedule_all(d))
             if p == "/api/rerender":
                 cmd, vdir, pf, plist = rerender(d)
                 if not d.get("dry"):  # a preview must not write anything
@@ -910,25 +1131,46 @@ class H(BaseHTTPRequestHandler):
                 st = ap_status()
                 if st: st["notified"] = True; (WS / "autopilot_status.json").write_text(json.dumps(st), encoding="utf-8")
                 return self.send(200, {"ok": 1})
-            if p == "/api/key":
-                E = env(); E["BLOTATO_API_KEY"] = d["key"]; save_env(E); return self.send(200, {"ok": 1})
-            if p in ("/api/blotato/preview", "/api/blotato/send"):
-                s = [x for x in shorts(d["run"]) if x["file"] == d["file"]][0]; f = d["form"]; kd = env().get("BLOTATO_API_KEY")
-                if p.endswith("preview"): return self.send(200, {"requests": blotato_requests(s, f, kd), "will_send": False})
-                if not kd: return self.send(400, {"error": "no Blotato key set"})
-                if d.get("confirm") is not True or not f.get("accountId"): return self.send(400, {"error": "needs confirm click and accountId"})
-                return self.send(200, {"response": blotato_send(d["run"], s, f, kd)})
         except urllib.error.HTTPError as e: return self.send(502, {"error": f"{e.code} {e.read()[:300].decode(errors='replace')}"})
         except Exception as e: return self.send(400, {"error": str(e)})
         self.send(404, {})
 
 
+def open_desktop_app(url):
+    """Open Collab Studio as a dedicated native desktop window (Edge/Chrome app mode) with no browser tabs/URL bar."""
+    if os.name == "nt":
+        candidates = [
+            os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                try:
+                    subprocess.Popen([p, f"--app={url}"])
+                    return
+                except Exception:
+                    pass
+    webbrowser.open(url)
+
 def main():
     global WS, STATE
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception: pass
     if sys.argv[1:2] == ["--chain"]: return chain_main(sys.argv[2], int(sys.argv[3]), sys.argv[4])
     a = [x for x in sys.argv[1:] if not x.startswith("--") and not x.isdigit()]
-    if not a: sys.exit(__doc__)
-    WS = Path(a[0]).resolve(); STATE = WS / "app_state.json"
+    if a:
+        WS = Path(a[0]).resolve()
+    else:
+        WS = (EXE_DIR / "workspace").resolve()
+        WS.mkdir(parents=True, exist_ok=True)
+    STATE = WS / "app_state.json"
     if "--autopilot" in sys.argv: return autopilot_main("--dry" in sys.argv)  # headless entry used by the OS task
     port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
     global PORT
@@ -936,8 +1178,19 @@ def main():
         try: srv = ThreadingHTTPServer(("127.0.0.1", p), H); PORT = p; break
         except OSError: continue
     else: sys.exit("no free port")
-    print(f"Clipper app on http://localhost:{p}  (workspace {WS})", flush=True)
-    if "--no-open" not in sys.argv: webbrowser.open(f"http://localhost:{p}")
+    print("=" * 66)
+    print("              COLLAB STUDIO - PORTABLE EDITION")
+    print("                Developed by Aivorystudios")
+    print("             More Apps: https://aivorygen.vercel.app")
+    print("=" * 66)
+    print(f" [+] Server active at : http://localhost:{p}/")
+    print(f" [+] Workspace folder : {WS}")
+    print(f" [+] Free Local Scheduler active (no paid API keys needed)")
+    print(f" [+] Browser opening automatically...")
+    print("=" * 66)
+    print(" Keep this window open while using Collab Studio.")
+    print(" Press Ctrl+C or close this window to exit.\n", flush=True)
+    if "--no-open" not in sys.argv: open_desktop_app(f"http://localhost:{p}")
     def upd_loop():
         while True:
             try: update_check(True)

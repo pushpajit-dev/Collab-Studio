@@ -155,7 +155,7 @@ def chat(chan, on_msg):
 
 def record(url, seg):  # shortcut: no stall watchdog, DST-ambiguous local names, children can outlive a crash; fine for an evening session, harden for 24/7
     while True:  # restart if the stream hiccups; segment names carry the wall-clock start, so restarts are harmless
-        sl = subprocess.Popen([sys.executable, "-m", "streamlink", "--stdout", "--twitch-disable-ads", url, "720p60,720p,best"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        sl = subprocess.Popen([sys.executable, "-m", "streamlink", "--stdout", "--twitch-disable-ads", url, "best,2160p60,2160p,1440p60,1440p,1080p60,1080p"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "-", "-c", "copy", "-f", "segment", "-segment_time", "4", "-strftime", "1", "-reset_timestamps", "1", str(seg / "s_%Y%m%d_%H%M%S.ts")], stdin=sl.stdout)
         sl.kill(); time.sleep(5)
 
@@ -169,7 +169,7 @@ def cut(seg, out, T, name):
     if not sel: return None
     lst = seg / f"{name}.txt"; lst.write_text("".join(f"file '{p.name}'\n" for _, p in sel), encoding="utf-8")  # names relative to the list: no quoting or code-page issues
     mp4 = out / f"{name}.mp4"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-ss", f"{max(a - sel[0][0], 0):.2f}", "-t", str(PRE + POST), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", str(mp4)], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-ss", f"{max(a - sel[0][0], 0):.2f}", "-t", str(PRE + POST), "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-c:a", "aac", "-b:a", "192k", str(mp4)], check=True)
     return mp4
 
 def buffer(out):

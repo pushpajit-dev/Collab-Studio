@@ -1,200 +1,191 @@
-<p align="center">
-  <img src="docs/img/banner.png" alt="gta6-clipper: one sentence in, GTA 6 Shorts out" width="100%">
-</p>
+<div align="center">
+  <img src="assets/logo.png" alt="Collab Studio Logo" width="320"/>
+  <h1>Collab Studio</h1>
+  <p><strong>100% Free Autonomous AI Clipping, 4K/60fps Vertical Video Rendering & Scheduling Studio</strong></p>
+  <p>
+    <em>Developed by <a href="https://aivorygen.vercel.app">Aivorystudios</a></em>
+  </p>
 
-<p align="center">
-  <b>Type one sentence in Claude Code. Get finished 9:16 GTA 6 Shorts from live streams and videos.</b><br>
-  It finds the loud, chat-heavy moments, frames the streamer and the game, adds word-by-word captions and a hook, and waits for your approval.
-</p>
-
-<!-- TODO: put the video URL in the first link below when the video is published -->
-<p align="center"><b><a href="#how-it-works">▶ Watch how it works (video soon)</a></b> &nbsp;·&nbsp; <b><a href="https://guide.nocodehack.io/gta6-clipper/">Free download</a></b></p>
-
-<table align="center">
-  <tr>
-    <td align="center"><img src="docs/img/short-kaicenat.webp" width="240" alt="Kai Cenat Short"><br><sub><b>Kai Cenat</b> · live on Twitch · one chat spike</sub></td>
-    <td align="center"><img src="docs/img/short-darkviperau.webp" width="240" alt="DarkViperAU Short"><br><sub><b>DarkViperAU</b> · live on Twitch · one chat spike</sub></td>
-    <td align="center"><img src="docs/img/short-lacy.webp" width="240" alt="Lacy Short"><br><sub><b>Lacy</b> · live on Twitch · one chat spike</sub></td>
-  </tr>
-</table>
-
-<p align="center"><sub>Made by the app from real GTA 6 early-access streams on 18 Nov 2026. Clips belong to their creators (see <a href="NOTICE.md">NOTICE</a>).</sub></p>
+  [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011%20(x64)-blue.svg)](#system-requirements)
+  [![Free & Open Source](https://img.shields.io/badge/License-MIT%20%2F%20Free-green.svg)](#features)
+  [![4K 60fps NVENC](https://img.shields.io/badge/GPU%20Acceleration-NVIDIA%20NVENC%204K60-orange.svg)](#hardware-acceleration)
+  [![Antigravity](https://img.shields.io/badge/AI%20Engine-Google%20Antigravity%20(agy)-purple.svg)](#antigravity-ai-linkage)
+  [![Release](https://img.shields.io/badge/Release-v2.0.0-brightgreen.svg)](#installation--download)
+</div>
 
 ---
 
-## Install in one sentence
+## 📌 Overview
 
-Open Claude Code and paste:
+**Collab Studio** is a complete, free, standalone desktop application that autonomously watches YouTube, Twitch, and Kick streams, discovers viral moments from audio energy and chat spikes, reframes landscape gameplay and streamer facecams into vertical 9:16 Shorts, generates word-by-word animated subtitles, and prepares free scheduled social media drops—**with zero required paid API keys**.
 
-```
-Install the gta6-clipper skill from https://guide.nocodehack.io/gta6-clipper/gta6-clipper.zip
-```
+---
 
-then:
+## 📸 Screenshots & Interface Tour
 
-```
-Set up the gta6-clipper skill on this PC
-```
+<div align="center">
+  <h3>1. Make Shorts & Generation Studio</h3>
+  <img src="assets/screenshot-make-shorts.png" alt="Make Shorts Interface" width="850"/>
+  <p><em>Create 10+ vertical 9:16 shorts from any YouTube, Twitch, or Kick URL in seconds.</em></p>
 
-That installs the skill and sets it up in about 3 minutes, into your global Claude skills folder (`~/.claude/skills/gta6-clipper`), so it works from any folder. If it finds an NVIDIA graphics card it also downloads about 2 GB of GPU packages (an optional speed-up; without a card it uses the CPU and nothing else changes).
+  <br/>
 
-**Using OpenCode instead of Claude Code?** The same two sentences work: open OpenCode in any folder and paste them. OpenCode puts the skill in `~/.config/opencode/skills/gta6-clipper` and finds it from there. Its free models work with no account. In the app, choose **Settings > AI tool > OpenCode**. Free models pick weaker moments than Claude, so review before you post. Want no AI at all? Choose **No AI** and it still makes Shorts, cut on chat and loudness spikes.
+  <h3>2. Home Dashboard & Real-Time Stream Hunt</h3>
+  <img src="assets/screenshot-home.png" alt="Home Dashboard" width="850"/>
+  <p><em>Real-time streamer live detection, pending shorts review counter, and scheduler tracker.</em></p>
 
-<details>
-<summary>Install by hand (Windows, macOS, Linux)</summary>
+  <br/>
 
-Download the zip from https://guide.nocodehack.io/gta6-clipper/ (or clone https://gitlab.com/nocodehack.io/gta6-clipper) into `~/.claude/skills/gta6-clipper` (or any folder you run Claude Code in), then:
+  <h3>3. Shorts Library & Bulk Download</h3>
+  <img src="assets/screenshot-shorts-library.png" alt="Shorts Library" width="850"/>
+  <p><em>Instant preview, QC quality checks, "Download All Clips (.zip)", and "Save All to Folder".</em></p>
 
-#### Install (Windows, macOS, Linux; Python 3.9 to 3.12)
+  <br/>
 
-Open a terminal in the skill folder, then:
+  <h3>4. Connected Antigravity AI Engine</h3>
+  <img src="assets/screenshot-settings-antigravity.png" alt="Settings & Antigravity Linkage" width="850"/>
+  <p><em>Native Google Antigravity (agy) integration detected in real time without paid API keys.</em></p>
+</div>
 
-| Step | Windows (PowerShell) | macOS (Terminal) | Linux (Debian/Ubuntu) |
-|---|---|---|---|
-| ffmpeg + ffprobe | `winget install Gyan.FFmpeg` | `brew install ffmpeg` | `sudo apt install ffmpeg` |
-| Python venv | `py -3.12 -m venv .venv` | `python3 -m venv .venv` | `python3 -m venv .venv` (`sudo apt install python3-venv`) |
-| Activate | `.venv\Scripts\activate` | `source .venv/bin/activate` | `source .venv/bin/activate` |
-| Libraries (includes yt-dlp + deno) | `pip install -r requirements.txt` | same | same |
+---
 
-- Open a NEW terminal after installing ffmpeg. Check: `ffmpeg -version`, `python -m yt_dlp --version`. Every script stops with the install line above if ffmpeg is missing.
-- GPU is optional. Windows/Linux with an NVIDIA card: `pip install -r requirements-gpu.txt` (Windows is wired in; on Linux also `export LD_LIBRARY_PATH=$(python -c "import nvidia.cublas.lib,nvidia.cudnn.lib,os;print(os.path.dirname(nvidia.cublas.lib.__file__)+':'+os.path.dirname(nvidia.cudnn.lib.__file__))")`). Mac (Intel or Apple Silicon) and no-GPU PCs: nothing to do, transcription falls back to CPU int8 on its own (model "base").
-- Colour emoji in captions need Segoe UI Emoji (Windows), Apple Color Emoji (Mac) or `sudo apt install fonts-noto-color-emoji` (Linux); without it the emoji style is skipped, nothing breaks. Caption fonts ship in `fonts/`.
-- Scheduled runs (Autopilot tab, always shown as a dry preview first): Windows = Task Scheduler (`schtasks`), macOS = launchd agent `~/Library/LaunchAgents/io.clipper.autopilot.plist` (`launchctl load -w`), Linux = a `crontab` line tagged `# clipper-autopilot` (a systemd user timer preview is shown too). Turn off = the "off" command in the same preview. The computer must be on and logged in at that time.
-- Always run with `python` from the venv (the skill calls `sys.executable`, never a hard-coded path).
+## ⚡ Key Highlights (Point-by-Point)
 
+- **100% Free & Unlimited**: Runs locally on your machine with zero monthly subscriptions or paid API tokens required.
+- **Dedicated Desktop App (No Terminal Window)**: Launches cleanly as a windowed desktop application without any black CMD console popup.
+- **Ultra-HD 4K 60fps GPU Pipeline**: Powered by NVIDIA NVENC hardware acceleration (`p5` preset, `-b:v 0`, `-cq 19`, `2160x3840`).
+- **Seam-Free & Divider-Free Framing**: Smart webcam face-tracking with zero black dividing lines or artificial splitters. Full-clip blurred fill is automatically engaged when webcam is absent.
+- **Multi-Source Real-Time Hunting**: Monitors 14+ top streamers on Twitch, YouTube, and Kick, auto-capturing chat volume spikes and loud gameplay peaks.
+- **Word-Level Animated Subtitles**: Whisper AI generates exact timestamped captions with dynamic karaoke highlight animations, glow outlines, and display font styles.
+- **Free Local Scheduling & Bulk Export**: One-click bulk download `.zip`, automated `.ics` calendar sync, and direct handoff to YouTube Studio, TikTok Studio, and Meta Business Suite.
 
-</details>
+---
 
-## How it works
+## 🚀 Installation & Download
 
-<img src="docs/img/how.png" alt="How it works: find, transcribe, pick, render, review, post" width="100%">
+### Option 1: Windows Installer (`CollabStudio-Installer.exe`) — Recommended
+1. Download **`CollabStudio-Installer.exe`** from the [Releases](#).
+2. Run the installer:
+   - Sets up desktop and Start Menu shortcuts with the official Collab Studio logo.
+   - Automatically provisions an **isolated virtual environment (`{app}\venv`)** separate from system Python.
+   - Uninstaller includes an option to preserve or wipe downloaded AI models.
 
-1. **You type one line.** `make 10 GTA 6 Shorts`, or `clip kaicenat live`, or paste a YouTube, Twitch or Kick link.
-2. **It finds and transcribes.** New GTA 6 videos or a live stream, transcribed on your own PC for free.
-3. **It picks the moments.** Loudness, chat speed and keywords score every window. Optionally an AI reads a shortlist and widens the good ones.
-4. **It renders.** 9:16, face-tracked cam on top, game below, word-by-word captions, a hook title, a cover and ready-to-paste post text.
-5. **You review.** One Short at a time: approve or reject. Nothing is ever posted without you.
-6. **You post.** Copy the text, or schedule everything with Blotato.
+### Option 2: Portable Desktop Edition (`CollabStudio-Portable-Windows-x64.zip`)
+1. Download **`CollabStudio-Portable-Windows-x64.zip`**.
+2. Extract to any folder.
+3. Double-click **`CollabStudio.exe`** to launch immediately. No terminal prompt or installation required.
 
-Want a change? Open a Short and say it in plain words: *"end 2 s earlier"*, *"bigger captions"*, *"new hook"*. The original is kept.
+---
 
-## The app
+## 🛠️ System Compatibility & Setup Doctor (`CollabStudioSetup.exe`)
 
-<img src="docs/img/hero.gif" alt="App flow: Home, Shorts by day, Review, Approved, Auto-schedule preview" width="100%">
+Collab Studio includes a dedicated diagnostic and setup tool: **`CollabStudioSetup.exe`**.
 
-Start it any time with `python app.py <your workspace folder>` (it opens http://localhost:8765).
+Launch it on first run or when re-verifying components to:
+1. **Verify System Hardware**:
+   - Operating System & 64-bit CPU architecture.
+   - Physical Memory (RAM): Minimum 8GB recommended (16GB for native 4K rendering).
+   - NVIDIA GPU & NVENC hardware encoder availability (fallback to libx264).
+   - FFmpeg and ffprobe binary status.
+2. **Download & Manage AI Neural Models** (with individual checkboxes and clear descriptions):
+   - **OpenAI Whisper (Speech-to-Text)**: Extracts word-level timestamps for synchronized auto-captions and hook detection.
+   - **YuNet Face Detector (ONNX)**: Pinpoints the streamer webcam overlay in real time so face reactions remain centered.
+   - **MediaPipe Lip-Sync & Face Mesh**: Tracks mouth motion velocity to trigger automated split-screen during podcast dialogue.
+   - **Meme Sound FX & Hook Pack**: Curated whooshes, risers, and stingers to increase short retention.
+   - **Viral Caption Fonts Pack**: Commercial-free display fonts (The Bold Font, Komika Axis, Montserrat, Anton).
+   - **yt-dlp 4K 60fps Extractor**: High-speed stream segment extractor.
 
-<table>
-<tr>
-<td width="50%"><img src="docs/img/home.png" alt="Home"><br><b>Home.</b> What needs review, what is approved, what the live hunt is watching.</td>
-<td width="50%"><img src="docs/img/shorts.png" alt="Shorts by day"><br><b>Shorts by day.</b> Every Short with a quality check (pass, warn, fail) and filters.</td>
-</tr>
-<tr>
-<td><img src="docs/img/review.png" alt="Review"><br><b>Review.</b> One Short at a time. A approves, X rejects, arrows move on.</td>
-<td><img src="docs/img/one-short.png" alt="One Short with Ask the AI"><br><b>One Short.</b> Ask the AI to change it in plain words. The original is kept.</td>
-</tr>
-<tr>
-<td><img src="docs/img/one-short-look.png" alt="Look tab"><br><b>Look tab.</b> Formats, layouts, caption themes, meme sounds, extra aspect ratios.</td>
-<td><img src="docs/img/streamers.png" alt="Streamers and live hunt"><br><b>Streamers.</b> Add a Twitch, YouTube or Kick link or a name; tick "Watch live".</td>
-</tr>
-<tr>
-<td colspan="2"><img src="docs/img/past-streams.png" alt="Past streams"><br><b>Past streams.</b> Missed the live? Open a streamer's last 5 streams (Twitch, Kick, YouTube) and click <b>Make Shorts</b>. Or paste any stream or VOD link.</td>
-</tr>
-<tr>
-<td colspan="2"><img src="docs/img/clip-rules.png" alt="Clip rules per streamer"><br><b>Clip rules.</b> Each streamer gets a badge: <b>Clipping allowed</b>, <b>Has clip tips</b>, <b>No clipping</b> or <b>Rules unknown</b>. Click it to see the source. The app will not clip a streamer who said no unless you confirm you have their permission.</td>
-</tr>
-<tr>
-<td colspan="2"><img src="docs/img/opencode.png" alt="OpenCode in Settings"><br><b>Any AI tool.</b> Claude Code, Codex, Gemini, Kimi, <b>OpenCode</b> (works on its free models), Ollama, your own command, or No AI.</td>
-</tr>
-<tr>
-<td><img src="docs/img/schedule.png" alt="Schedule"><br><b>Schedule.</b> Drag Shorts onto the week, or spread them automatically. Preview first.</td>
-<td><img src="docs/img/settings.png" alt="Settings"><br><b>Settings.</b> Language, updates, and how much AI to use.</td>
-</tr>
-</table>
+---
 
-## Live hunt: 8 GTA 6 streams at once
+## 🤖 Antigravity AI Linkage
 
-Tick "Watch live" on a streamer and the app records the stream, watches chat speed and loudness, and cuts a Short the moment chat spikes. These are real frames from the 8 streams it recorded at once on 18 Nov 2026:
+Collab Studio connects directly to **Google Antigravity** via its command-line interface (`agy`):
 
-<img src="docs/img/collage-live-hunt.png" alt="Live hunt: 8 GTA 6 streams at once, with chat messages per minute" width="100%">
+1. **Automatic Detection**:
+   Collab Studio automatically detects `agy.bat` located at `~/.gemini/antigravity/bin/agy.bat` or in your system `PATH`.
+2. **Zero Paid API Keys Needed**:
+   Prompts are sent directly through Antigravity CLI without requiring external billing or third-party paid keys.
+3. **100% Free Heuristic Fallback**:
+   If Antigravity is not detected, Collab Studio automatically switches to **No-AI Heuristic Mode**, picking clips using chat density spikes, root-mean-square loudness peaks, and video scene transitions.
 
-- **Spike detection:** a chat spike is a few times the stream's own baseline, so a quiet streamer and a huge one are judged fairly.
-- **Setup first:** the Short starts 17-20 s before the spike so the viewer sees what caused it.
-- **Up to 60 s,** because real viral moments run 6 to 61 s.
-- **Credit built in:** every Short carries a credit line to the streamer in its post text.
+---
 
-<p align="center"><img src="docs/img/finished-shorts.png" alt="Finished 9:16 Shorts" width="640"></p>
+## 🔑 YouTube Data API v3 & OAuth 2.0 Setup Guide
 
-## What you can type
+If you wish to enable direct YouTube channel synchronization and automated metadata publishing:
 
-| Prompt | What happens |
-|---|---|
-| `make 10 GTA 6 Shorts` | Finds the newest GTA 6 videos, picks the best moments and renders up to 10 Shorts |
-| `make Shorts from <link>` | Same, from one YouTube, Twitch or Kick video |
-| `clip <streamer> live` | Records the stream and cuts a Short on every chat spike |
-| `add my voice to this clip` | Adds your own voice-over to a finished Short |
-| `open the clipper app` | Opens the web app with all your Shorts |
+### Step 1: Create a Google Cloud Project
+1. Navigate to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Click **Select a project** > **New Project**.
+3. Name your project **`Collab Studio`** and click **Create**.
 
-## How much AI
+### Step 2: Enable YouTube Data API v3
+1. In the left navigation menu, go to **APIs & Services** > **Library**.
+2. Search for **`YouTube Data API v3`**.
+3. Click on the API card and click **Enable**.
 
-Transcription, framing, captions and rendering run on your PC for free. Only the choice of moments can use AI. Measured on a real run (usage is a share of one Claude Pro session):
+### Step 3: Configure the OAuth Consent Screen
+1. Go to **APIs & Services** > **OAuth consent screen**.
+2. Select User Type: **External** and click **Create**.
+3. Fill in:
+   - **App name**: `Collab Studio`
+   - **User support email**: Your email address
+   - **Developer contact email**: Your email address
+4. Click **Save and Continue** through the Scopes step (no custom scopes needed).
 
-| Mode | What picks the moments | Cost per 10 Shorts |
-|---|---|---|
-| Free | Loudness, chat and keyword scoring. Weakest picks | 0 |
-| Smart (default) | AI reads a shortlist of the 30 best windows and may widen them | about 8-25% of a Claude Pro session |
-| Deep | AI reads the full transcripts; catches quiet stories | about 30-90% of a Claude Pro session |
-| Live spike (optional AI check) | AI looks at one chat spike | about 1-4% of a session |
+### Step 4: Add Your YouTube Channel Email as a Test User (CRITICAL)
+> **IMPORTANT**: Because your project is in testing mode, Google only permits authorized test users to authenticate.
+1. In the **Test users** step (or under **Audience** > **Test users**), click **+ ADD USERS**.
+2. Enter the **exact email address** associated with your YouTube channel.
+3. Click **Save**.
 
-Live hunt defaults to Free (no AI) with a cap on AI checks per hour. Your Claude plan is the only thing used; no API keys are needed.
+### Step 5: Create Desktop OAuth Credentials
+1. Go to **APIs & Services** > **Credentials**.
+2. Click **+ CREATE CREDENTIALS** > **OAuth client ID**.
+3. Set **Application type** to **Desktop App**.
+4. Name it `Collab Studio Desktop Client` and click **Create**.
+5. Click **Download JSON** and save the file as `client_secret.json`.
 
-## Automate posting with Blotato
+### Step 6: Connect in Collab Studio Setup
+1. Launch **`CollabStudioSetup.exe`**.
+2. Open the **YouTube Data API v3** tab.
+3. Click **Browse...** and select your downloaded `client_secret.json`.
+4. Click **Authorize & Connect Channel**.
+5. Your browser will open asking you to select your Google Account and grant permissions. Once verified, your channel name and avatar will be connected!
 
-<img src="docs/img/blotato.png" alt="Blotato" width="72" align="left">
+*(Note: If you do not configure Google Cloud API, Collab Studio's Free Local Schedulers and one-click bulk export work 100% offline with zero setup).*
 
-[Blotato](https://blotato.com/?ref=nocodehack) posts your scheduled Shorts to YouTube, TikTok and Instagram for you. The app builds the schedule; Blotato does the posting. It is a paid tool and optional.
+---
 
-Black Friday: code `BLACKFRIDAY2026` = 50% off for 3 months, until 30 November 2026.
+## 📋 Free Local Schedulers
 
-<img src="docs/img/blotato-connect.png" alt="Connect Blotato dialog in the app" width="100%">
+Collab Studio provides zero-friction handoff to free native platform schedulers without requiring paid third-party posting APIs:
 
-Connect it to Claude Code with one command:
+| Platform | Free Scheduler URL | Method |
+| :--- | :--- | :--- |
+| **YouTube Shorts** | [YouTube Studio](https://studio.youtube.com/) | Drag up to 15 MP4s at once &gt; Set Visibility to **Schedule** |
+| **TikTok** | [TikTok Studio](https://www.tiktok.com/tiktokstudio/upload) | Upload MP4 &gt; Enable **Schedule video** toggle |
+| **Instagram / FB** | [Meta Business Suite](https://business.facebook.com/latest/composer) | Create Reel &gt; Select **Scheduling options** |
+| **X / Twitter** | [X Compose](https://x.com/compose/post) | Attach video &gt; Click the **Calendar icon** |
 
-```
-claude mcp add --transport http blotato https://mcp.blotato.com/mcp
-```
+Export all metadata at once with the **`POSTING_PLAN.txt`** and **`schedule.ics`** calendar files included in the bulk `.zip` download.
 
-Then type `/mcp` in Claude Code, pick Blotato and sign in. Disclosure: the link above is a partner (affiliate) link. If you sign up the author may earn a commission, at no extra cost to you, and it supports this free app.
+---
 
-## Updates
+## 💻 Tech Stack & Architecture
 
-The app checks for updates every 5 hours (GitHub, then this GitLab mirror, then guide.nocodehack.io). "Update now" replaces only the app files and keeps your workspace, brand settings, keys and clips. See [CHANGELOG.md](CHANGELOG.md).
+- **Backend**: Python 3.13 standard library (`http.server`, `subprocess`, `threading`, `json`).
+- **Frontend**: Zero-dependency single-file reactive HTML/CSS/JS (`app.html`) with CSS design system tokens.
+- **Video Engine**: FFmpeg with NVIDIA NVENC (`h264_nvenc`) GPU hardware acceleration + OpenCV.
+- **Vision Models**: YuNet face detection ONNX + MediaPipe Face Mesh.
+- **Audio Models**: OpenAI Whisper (transcription & word alignment).
+- **Desktop Wrapper**: Microsoft Edge / Chrome application window launcher (`--noconsole`).
+- **Installer**: Inno Setup 6 with custom Pascal uninstallation routines.
 
-<img src="docs/img/updates.png" alt="Updates in Settings" width="480">
+---
 
-## Propose a change
+## 📄 License & Attribution
 
-Use the "Propose a change" button in the app, or open an issue: https://gitlab.com/nocodehack.io/gta6-clipper/-/issues/new. Every idea is read.
-
-## What it does not do yet
-
-- It does not know what will go viral. It finds loud, chat-heavy moments and ranks them; you decide what to approve.
-- It does not post by itself unless you connect Blotato and approve the schedule.
-- Live hunt on a weak PC is limited to a few streams at once; recording 8 needs a strong machine and a good connection.
-- Some Shorts fail the built-in quality check (too short, no speech); the app marks them so you can skip or fix them.
-
-## FAQ
-
-**Is it free?** Yes. The tool is free; Claude Code runs on your own Claude plan. Blotato is an optional paid service.
-
-**Who owns the clips?** The streamers do. Credit them and respect their rules; see [NOTICE.md](NOTICE.md).
-
-**Does it work without an AI?** Yes, Free mode scores loudness, chat and keywords and renders automatically.
-
-## License
-
-MIT, see LICENSE. Bundled fonts keep their own OFL licenses (`fonts/`); models are listed in `models/NOTICES.txt`.
-
-## Credits
-
-Built by [NoCodeHack](https://www.youtube.com/@nocodehack) with Claude Code. Uses ffmpeg, faster-whisper, yt-dlp, streamlink, OpenCV and MediaPipe. Blotato is a third-party service. Streamers in the images are credited on the clips they appear in. Fan-made, not affiliated with Rockstar Games, Take-Two or any streamer.
+- **License**: MIT License — 100% Free and Open Source.
+- **Developer**: Developed by **Aivorystudios** ([https://aivorygen.vercel.app](https://aivorygen.vercel.app)).
+- **Repository**: [https://github.com/pushpajit-dev/collab-studio](https://github.com/pushpajit-dev/collab-studio)

@@ -172,17 +172,19 @@ def peaks(db, speech, dur, ok=lambda t: True, over=0, lo=1.5, gap=6.0, n=2):  # 
         if lo + 0.15 <= t <= dur - 1.5 and all(abs(t - u) >= gap for u in out) and ok(t): out.append(t)
     return sorted(out)
 
-def zoom_filter(ps, stack, hit=None, flip=False):
+def zoom_filter(ps, stack, hit=None, flip=False, sc=None):
     """Smoothstep in/out zoom as one ffmpeg expression of t. scale(eval=frame)+crop on an whole-pixel crop on a 2 px size grid: no zoompan, so no whole-pixel shake.
-    stack: only the top cam panel (rows 0-763, seam kept); else the whole frame about the face (upper-middle)."""
+    stack: only the top cam panel (rows 0-763*sc, seam kept); else the whole frame about the face (upper-middle)."""
+    S = reframe.SCALE if sc is None else sc
+    W, H, CH = 1080 * S, 1920 * S, 764 * S
     u = lambda x: f"clip({x},0,1)"; ease = lambda x: f"({u(x)}*{u(x)}*(3-2*{u(x)}))"
     zi = lambda a: HIT_ZIN if a == hit else ZIN  # the hit (loudest peak) snaps in, the others drift
     z = "(" + "+".join(f"{HIT_AMP if a == hit else 1}*{ease(f'(t-{a:.3f})/{zi(a)}')}*(1-{ease(f'(t-{b:.3f})/{ZOUT}')})" for a, b in ps) + ")"  # 0..1 (1.6 on the hit)
     d = lambda n: f"{n}+4*round({n}*{ZOOM}*{z}/4)"  # scaled size on a 4 px grid: centred crop offset is a whole even pixel (2 px grid showed 1 px spikes)
-    py = 1156 if flip else 0  # flip: the cam panel is the bottom 764 rows, its seam box sits above it
-    if not stack: return f"scale=w='{d(1080)}':h='{d(1920)}':eval=frame:flags=bicubic,crop=1080:1920:'({d(1080)}-1080)/2':'round(0.3*({d(1920)}-1920))'"
-    return (f"split[p][q];[p]crop=1080:764:0:{py},scale=w='{d(1080)}':h='{d(764)}':eval=frame:flags=bicubic,crop=1080:764:'({d(1080)}-1080)/2':'({d(764)}-764)/2'[z];"
-            f"[q][z]overlay=0:{py},drawbox=x=0:y={1149 if flip else 764}:w=1080:h=7:color=black:t=fill:enable='{'+'.join(f'between(t,{a - .05:.3f},{b + ZOUT + .05:.3f})' for a, b in ps)}'")
+    py = 1156 * S if flip else 0  # flip: the cam panel is the bottom 764*S rows, its seam box sits above it
+    if not stack: return f"scale=w='{d(W)}':h='{d(H)}':eval=frame:flags=lanczos,crop={W}:{H}:'({d(W)}-{W})/2':'round(0.3*({d(H)}-{H}))'"
+    return (f"split[p][q];[p]crop={W}:{CH}:0:{py},scale=w='{d(W)}':h='{d(CH)}':eval=frame:flags=lanczos,crop={W}:{CH}:'({d(W)}-{W})/2':'({d(CH)}-{CH})/2'[z];"
+            f"[q][z]overlay=0:{py}")
     # the 764-row panel leaves a 1 px strip above the 6 px seam: paint it black, but only while a zoom runs (the Short may switch to full screen elsewhere)
 
 def flash(hit):
@@ -405,18 +407,20 @@ def game_gamma(mean):
     if mean >= GAME_BELOW: return None
     return round(min(max(np.log(max(mean, 8) / 255) / np.log(GAME_TARGET / 255), 1.1), GAME_MAX), 2)
 def game_luma(v, stacked, n=8, flip=False):
-    """Mean luma of the game region over n frames: rows 768+ of the stack, else the whole frame."""
+    """Mean luma of the game region over n frames: rows 40%+ of the stack, else the whole frame."""
     cap = cv2.VideoCapture(str(v)); N = cap.get(cv2.CAP_PROP_FRAME_COUNT); m = []
     for k in range(n):
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(N * (k + .5) / n)); ok, f = cap.read()
-        if ok: m.append(cv2.cvtColor((f[:1140] if flip else f[780:]) if stacked else f, cv2.COLOR_BGR2GRAY).mean())
+        if ok:
+            H = f.shape[0]; m.append(cv2.cvtColor((f[:int(H * 1140 / 1920)] if flip else f[int(H * 780 / 1920):]) if stacked else f, cv2.COLOR_BGR2GRAY).mean())
     cap.release(); return float(np.mean(m)) if m else 255.0
 def cam_luma(v, n=5, flip=False):
-    """Mean luma of the top 764 rows (the cam panel of the stacked layout) over n frames."""
+    """Mean luma of the cam panel of the stacked layout over n frames."""
     cap = cv2.VideoCapture(str(v)); N = cap.get(cv2.CAP_PROP_FRAME_COUNT); m = []
     for k in range(n):
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(N * (k + .5) / n)); ok, f = cap.read()
-        if ok: m.append(cv2.cvtColor(f[1160:] if flip else f[:760], cv2.COLOR_BGR2GRAY).mean())
+        if ok:
+            H = f.shape[0]; m.append(cv2.cvtColor(f[int(H * 1160 / 1920):] if flip else f[:int(H * 760 / 1920)], cv2.COLOR_BGR2GRAY).mean())
     cap.release(); return float(np.mean(m)) if m else 255.0
 
 def load_brand(out):
@@ -491,9 +495,9 @@ def wm_xy(pos, W, H, y0=0):
     return {"tl": (40, top), "tr": ("W-w-40", top), "bl": (40, f"H-h-{190 if H > 1500 else 60}"), "br": ("W-w-40", f"H-h-{190 if H > 1500 else 60}"),
             "bounce": ("'40+(W-w-80)*abs(mod(t/7,2)-1)'", top)}.get(pos, (40, top))
 
-def progress_bar(dur, color="FFE500", h=12):
+def progress_bar(dur, color="FFE500", h=12, sc=1):
     """Source + overlay pieces for a bar along the bottom edge that fills left to right over the Short (track in dim black)."""
-    return f"color=c=0x{color}:s=1080x{h}:r=30:d={dur:.2f}", f"overlay=x='-w+w*t/{dur:.3f}':y=H-{h}"
+    return f"color=c=0x{color}:s={1080 * sc}x{h * sc}:r=30:d={dur:.2f}", f"overlay=x='-w+w*t/{dur:.3f}':y=H-{h * sc}"
 
 STACKED = False
 def need_ffmpeg():  # one clear install line per OS instead of a FileNotFoundError deep in a render
@@ -514,12 +518,13 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
     work.mkdir(parents=True, exist_ok=True)
     seg, v916, sub = work / "seg.mp4", work / "seg_916.mp4", work / "captions.ass"
     seek = start
-    if src.startswith("http"):  # a link: fetch only this moment (full downloads 403; H.264 because OpenCV decodes AV1 slowly)
+    if src.startswith("http"):  # a link: fetch highest quality up to 4K (2160p -> 1440p -> 1080p60) so cropped webcams stay crisp
         part = work / "src.mp4"
         for attempt in range(3):  # section downloads sometimes come back with the audio cut short: check and fetch again
             for retry in range(2):  # one retry on a stalled download
                 try:
-                    subprocess.run([sys.executable, "-m", "yt_dlp", *CK, "-q", "--force-overwrites", "-S", "vcodec:h264,res:1080",
+                    subprocess.run([sys.executable, "-m", "yt_dlp", *CK, "-q", "--force-overwrites",
+                                    "-f", "bv*[height<=2160]+ba/bestvideo[height<=2160]+bestaudio/best", "-S", "res:2160,fps:60,br",
                                     "--download-sections", f"*{start:.2f}-{end:.2f}", "--force-keyframes-at-cuts", "--merge-output-format", "mp4", "-o", str(part), src], timeout=600); break
                 except subprocess.TimeoutExpired: print(f"  DOWNLOAD TIMEOUT (600 s) for {src} {start:.0f}-{end:.0f}s" + (", retrying once" if retry == 0 else ""))
             else: raise SystemExit(f"download timed out twice (600 s each): {src}; try this Short again later")
@@ -529,9 +534,10 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
         else: raise SystemExit("audio keeps coming back short; try this Short again later")
         src, seek = str(part), 0
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{seek:.3f}", "-to", f"{seek + end - start:.3f}", "-i", src,
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-c:a", "aac", "-b:a", "192k", str(seg)], check=True, timeout=300 + 20 * (end - start))
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "13", "-c:a", "aac", "-b:a", "192k", str(seg)], check=True, timeout=300 + 20 * (end - start))
     reframe.crop_bars(seg)  # black bars baked into the stream frame (trailer/cutscene letterbox) would show as strips or a small picture
     global CAP_Y, HOOK_Y, STACKED, KEY
+    S = reframe.SCALE  # 2 for native 4K (2160x3840), 1 for 1080x1920
     flip = truthy(opt("flip", opts, brand, "")); reframe.FLIP = flip
     KEY = str(brand.get('colors', {}).get("key", "5CFF3D")).lstrip('#')
     if layout != "full" and reframe.is_call(seg): layout = "full"; print("  video call (two tiles side by side): tile stack")
@@ -539,9 +545,9 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
     info = reframe.render_stack(seg, v916, cam, layout) if cam else None  # None = bubble asked but no real webcam box: normal framing below
     if info:  # streamer reaction: facecam on top, game below, captions on the seam
         info["shots"] = []
-        if layout == "bubble": HOOK_Y = reframe.BUB_Y + reframe.BUB + 90  # hook under the bubble, captions at the style's height
+        if layout == "bubble": HOOK_Y = reframe.BUB_Y // S + reframe.BUB // S + 90  # ASS logical 1080x1920 coordinates
         else:
-            STACKED = True; CAP_Y, HOOK_Y = (reframe.stack_geom(True)["seam"] - 100, 330) if flip else (reframe.TOP_H + 120, reframe.TOP_H - 90)  # flip: captions just above the seam (the cam face is below), hook in the top part
+            STACKED = True; CAP_Y, HOOK_Y = (reframe.stack_geom(True)["seam"] // S - 100, 330) if flip else (reframe.TOP_H // S + 120, reframe.TOP_H // S - 90)
     else:
         info, xs, mode = reframe.plan(seg)
         if layout == "full": mode = ["fill"] * len(mode); info["shots"] = [s | dict(mode="fill") for s in info["shots"]]  # whole frame over a blurred fill: nobody cut out
@@ -592,7 +598,7 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
         def zoomable(t):
             for u in (t - .15, t + 1, t + 2.3):
                 o = orig(min(max(u, 0), new_dur))
-                if cam: cap.set(cv2.CAP_PROP_POS_MSEC, o * 1000); ok, f = cap.read(); good = ok and f[(1150 if flip else 766):(1152 if flip else 768)].max() < 12
+                if cam: cap.set(cv2.CAP_PROP_POS_MSEC, o * 1000); ok, f = cap.read(); good = ok and f[(1150 if flip else 766) * S:(1152 if flip else 768) * S].max() < 12
                 else: good = all(s["mode"] == "crop" for s in info["shots"] if s["start"] <= o * fps < s["end"])
                 if not good: return False
             return True
@@ -635,13 +641,13 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
     lift = ""
     if cam and layout != "bubble" and truthy(opt("lift", opts, brand, "1")):
         lm = cam_luma(v916, flip=flip); g = lift_gamma(lm)
-        if g: cy = 1156 if flip else 0; lift = f"split[l0][l1];[l0]crop=1080:764:0:{cy},eq=gamma={g}:brightness=0.02[ll];[l1][ll]overlay=0:{cy},"; print(f"  dark cam panel (luma {lm:.0f}): gamma {g} on the cam panel")
+        if g: cy = (1156 if flip else 0) * S; lift = f"split[l0][l1];[l0]crop={1080 * S}:{764 * S}:0:{cy},eq=gamma={g}:brightness=0.02[ll];[l1][ll]overlay=0:{cy},"; print(f"  dark cam panel (luma {lm:.0f}): gamma {g} on the cam panel")
     # dark game footage (critics: "the game footage is dark"): gentle gamma lift on the game region only (same switch: lift=0)
     if truthy(opt("lift", opts, brand, "1")):
         stk = bool(cam and layout != "bubble"); gm = game_luma(v916, stk, flip=flip); gg = game_gamma(gm)
         if gg:
             eqf = f"eq=gamma={gg}:contrast=1.04"
-            gy = 0 if flip else 768; lift += (f"split[g0][g1];[g0]crop=1080:1152:0:{gy},{eqf}[gl];[g1][gl]overlay=0:{gy}," if stk else f"{eqf},")
+            gy = (0 if flip else 768) * S; lift += (f"split[g0][g1];[g0]crop={1080 * S}:{1152 * S}:0:{gy},{eqf}[gl];[g1][gl]overlay=0:{gy}," if stk else f"{eqf},")
             print(f"  dark game footage (luma {gm:.0f}): gamma {gg} on the game panel")
     # overlays per export: watermark, emoji pops, progress bar (inputs after the video: indexes count up)
     extra, wmspec = [], str(opt("watermark", opts, brand, "") or "")
@@ -650,7 +656,7 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
     emos = {}
     for t, e in (emo or []):
         if e not in emos: emos[e] = work / f"emo{len(emos)}.png"; emos[e] = emos[e] if make_emoji(e, emos[e]) else None
-    wmw = int(1080 * float(opt("watermark_size", opts, brand, 0.22))); wmo = float(opt("watermark_opacity", opts, brand, 0.7)); wpos = str(opt("watermark_pos", opts, brand, "tl"))
+    wmw = int(1080 * S * float(opt("watermark_size", opts, brand, 0.22))); wmo = float(opt("watermark_opacity", opts, brand, 0.7)); wpos = str(opt("watermark_pos", opts, brand, "tl"))
     bar = truthy(opt("progress", opts, brand, "")); pcol = str(opt("progress_color", opts, brand, "FFE500")).lstrip("#")
     def deco(k, H, y0, src_lab, dst):
         f, cur = "", src_lab
@@ -659,26 +665,30 @@ def main(src, tjson, start, end, hook, out, keys="", style="", layout="", opts="
             extra.extend(["-i", Path(png).name])  # one frame: overlay repeats it (a looped input deadlocked ffmpeg with many trim/concat segments)
             n = f"x{k}_{len(extra)}"; f += f"[{len(extra) // 2}:v]{chain}[{n}n];[{cur}][{n}n]{over}[{n}];"; cur = n
         if wmp:
-            x, y = wm_xy(wpos, 1080, H, y0); ov(wmp, f"format=rgba,scale={wmw}:-1,colorchannelmixer=aa={wmo}", f"overlay=x={x}:y={y}")
+            x, y = wm_xy(wpos, 1080, H, y0)
+            xs = x * S if isinstance(x, int) else x.replace("40", str(40 * S)).replace("80", str(80 * S))
+            ys = y * S if isinstance(y, int) else y.replace("190", str(190 * S)).replace("60", str(60 * S))
+            ov(wmp, f"format=rgba,scale={wmw}:-1,colorchannelmixer=aa={wmo}", f"overlay=x={xs}:y={ys}")
         for t, e in (emo or []):
             if emos.get(e):
-                Y = max(my_y(H, y0) - 235, 200 - y0 if y0 else 200)
-                ov(emos[e], "format=rgba", f"overlay=x=(W-w)/2:y='{Y}+50*max(0,1-(t-{t:.2f})*7)':enable='between(t,{t:.2f},{t + 1.0:.2f})'")
+                Y = max(my_y(H, y0) - 235, 200 - y0 if y0 else 200) * S
+                ov(emos[e], f"format=rgba,scale=iw*{S}:-1", f"overlay=x=(W-w)/2:y='{Y}+{50 * S}*max(0,1-(t-{t:.2f})*7)':enable='between(t,{t:.2f},{t + 1.0:.2f})'")
         if bar:
-            s, o = progress_bar(new_dur, pcol); f += f"{s}[bar{k}];[{cur}]drawbox=x=0:y=ih-12:w=iw:h=12:color=black@0.35:t=fill[tr{k}];[tr{k}][bar{k}]{o}[{dst}];"; cur = dst
+            s, o = progress_bar(new_dur, pcol, 12, S); f += f"{s}[bar{k}];[{cur}]drawbox=x=0:y=ih-{12 * S}:w=iw:h={12 * S}:color=black@0.35:t=fill[tr{k}];[tr{k}][bar{k}]{o}[{dst}];"; cur = dst
         return f + (f"[{cur}]null[{dst}];" if cur != dst else "")
     my_y = lambda H, y0: (lambda v: int(min(max(v - y0, 150), H - 170)) if (y0 or H != 1920) else int(v))(cap_y(st, pos))
     nb = len(branches); flx = flash(hit) if truthy(opt('flash', opts, brand, '')) else ''  # the white flash on the peak zoom read as a glitch to critics: off unless asked
     fg = (cuts + "".join(f"[v{i}][a{i}]" for i in range(len(spans))) + f"concat=n={len(spans)}:v=1:a=1[vc][ac];"
           + (f"[vc]{frz}{lift}null[vc2];" if (lift or frz) else "[vc]null[vc2];")
-          + (f"[vc2]{zoom_filter(punch, bool(cam), hit, flip)}{flx}[vz0];" if punch else "[vc2]null[vz0];")  # zoom first: captions and hook never zoom
+          + (f"[vc2]{zoom_filter(punch, bool(cam), hit, flip, S)}{flx}[vz0];" if punch else "[vc2]null[vz0];")  # zoom first: captions and hook never zoom
           + f"[vz0]{GRADE}[vz];"
           + (f"[vz]split={nb}" + "".join(f"[s{k}]" for k in range(nb)) + ";" if nb > 1 else "[vz]null[s0];"))
     for k, (suf, H, y0) in enumerate(branches):
-        fg += f"[s{k}]" + (f"crop=1080:{H}:0:{y0}," if H != 1920 else "") + f"ass=cap{k}.ass:fontsdir=.[c{k}];" + deco(k, H, y0, f"c{k}", f"o{k}")
+        fg += f"[s{k}]" + (f"crop={1080 * S}:{H * S}:0:{y0 * S}," if H != 1920 else "") + f"ass=cap{k}.ass:fontsdir=.[c{k}];" + deco(k, H, y0, f"c{k}", f"o{k}")
     fg += f"[ac]{dn}{ln}[an];" + whoosh(punch) + f"afade=t=out:st={max(new_dur - 0.08, 0):.2f}:d=0.08" + (f",asplit={nb}" + "".join(f"[a{k}]" for k in range(nb)) if nb > 1 else "[a0]") + ";"  # hard cut on the punchline (refs end on the peak, no fade); 80 ms only to avoid a click
+    enc = reframe.encoder(17)  # RTX GPU NVENC CQ 17 (or x264 CRF 17) for crisp high-bitrate 4K vertical Shorts
     outs = []
-    for k, (suf, H, y0) in enumerate(branches): outs += ["-map", f"[o{k}]", "-map", f"[a{k}]", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str((out.parent / (out.stem + suf + out.suffix)).resolve())]
+    for k, (suf, H, y0) in enumerate(branches): outs += ["-map", f"[o{k}]", "-map", f"[a{k}]", *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str((out.parent / (out.stem + suf + out.suffix)).resolve())]
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", v916.name, *extra, "-filter_complex", fg.rstrip(";"), *outs], check=True, cwd=work, timeout=600 + 30 * new_dur)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1", "-i", str(out.resolve()), "-frames:v", "1", "-q:v", "2", str(out.with_name(out.stem + "_cover.jpg").resolve())])  # fresh cover (frame at 1 s) for a Short re-cut with clip.py alone
     cut = dur - new_dur - lead
@@ -736,7 +746,7 @@ if __name__ == "__main__":
     assert with_theme({}, {}) == {"colors": {}} and with_theme({}, {"theme": "clean"})["style"] == "classic"
     try: with_theme({}, {"theme": "nope"}); raise AssertionError("unknown theme must fail")
     except SystemExit as _e: assert "unknown theme" in str(_e) and "neon" in str(_e)
-    assert reframe.stack_geom(True)["seam"] == 1152 and "1156" in zoom_filter([(1, 2)], True, None, True) and "1156" not in zoom_filter([(1, 2)], True)  # flip: cam panel below the game
+    assert reframe.stack_geom(True)["seam"] == 1152 * reframe.SCALE and str(1156 * reframe.SCALE) in zoom_filter([(1, 2)], True, None, True) and str(1156 * reframe.SCALE) not in zoom_filter([(1, 2)], True)  # flip: cam panel below the game
     assert len(STYLES) >= 32 and set(ANIM) <= set(STYLES), "14 old + 18 new styles, every animated one is a style"
     _W = [dict(w=x, s=i * .35, e=i * .35 + .3, end=False) for i, x in enumerate("I just won a million dollars look at this crazy game".split())]
     for _n in STYLES:  # every style writes a caption file: header + hook + one Dialogue per spoken word (or per line)

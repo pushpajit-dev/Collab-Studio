@@ -83,9 +83,9 @@ PY SKILL\voice.py clips\out\<name>.mp4 line.wav AT clips\out\<name>_voice.mp4
 `AT` is the second the line starts, usually right after the payoff. The game drops about 18 dB under the line. Several Shorts: run it once per Short with that Short's line.
 
 
-## The app (optional: when the user wants to see, review or send the results in a browser)
+## The app (optional: when the user wants to see, review or schedule the results in a browser)
 Start it in the background from the user's folder (the workspace; it lists every `clips/out` folder under it as a tab):
 ```
 PY SKILL\app.py <workspace folder> [--port 8765] [--no-open]
 ```
-It opens `http://localhost:8765` in the browser (`--no-open` skips that; if the port is taken it uses another, so read the address it prints). Tell the user the address; it keeps running until closed. Nothing extra to install. Nothing is posted unless the user has set a Blotato key and clicks "Confirm send" on a Short. The app also has an autopilot panel that schedules a weekly run through the OS scheduler (`app.py --autopilot <workspace>`); set it up from the app only when the user asks, and never run `--autopilot` yourself.
+It opens `http://localhost:8765` in the browser (`--no-open` skips that; if the port is taken it uses another, so read the address it prints). Tell the user the address; it keeps running until closed. Nothing extra to install. Uses 100% free local scheduling (weekly calendar, `.ics` calendar export, `.csv` export, Free Posting Pack `.zip`, local Published tracking, and direct links to free YouTube Studio / TikTok Studio / Meta Business Suite — no paid Blotato API keys). The app also has an autopilot panel that schedules a weekly run through the OS scheduler (`app.py --autopilot <workspace>`); set it up from the app only when the user asks, and never run `--autopilot` yourself.
